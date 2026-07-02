@@ -3,7 +3,7 @@
 
 # MyAgents
 
-![MyAgents widget](docs/screenshots/widget.png)
+![MyAgents widget](docs/screenshots/firstimagewidget.png)
 
 A lightweight, always-on-top **Windows** widget that watches **all your AI-coding terminals at once**.
 See what every [Claude Code](https://claude.com/claude-code) and [Codex](https://developers.openai.com/codex)
@@ -61,7 +61,7 @@ Launch it (double-click the exe / the **MyAgents** shortcut, or `winget`-install
 - **⚙ menu** (opens away from the screen edge so it never covers the app): show/hide widget, **show usage**, **track Codex**, **Restart WSL**, export diagnostics, position, **Start with Windows**, repair / uninstall hooks.
 - **Position** submenu (or drag-snap) puts the widget in any corner; on a bottom corner it grows upward.
 
-![Click to focus](docs/screenshots/focus.gif)
+> **▶ [Watch a short demo](docs/screenshots/videoopenandclosingapp.mp4)** — opening and closing the app. (Click to play it in GitHub's viewer.)
 
 > **Tip:** enable **Start with Windows** from the ⚙ menu so it's always running and you never have to hunt for it.
 
@@ -94,7 +94,7 @@ rather than shown as if it were live.
 A small **robot**, tinted by state, or your **5h usage %** as a badge when usage is on. Left-click toggles the
 widget. If you don't see it, click the tray overflow arrow (▲) and drag it out to keep it visible.
 
-![Tray + menu](docs/screenshots/menu.png)
+![Tray + menu](docs/screenshots/menubutton.png)
 
 ## Updating
 

@@ -1,11 +1,13 @@
 # Screenshots
 
-Drop PNG/GIF captures here with these exact names (referenced by the README):
+Media referenced by the main README (keep the names in sync if you replace them):
 
-- `widget.png` — the widget with a few sessions + usage bars
-- `tray.png` — the robot tray icon (with the % badge)
-- `focus.gif` — clicking a row focusing the right terminal tab
+- `firstimagewidget.png` — the widget with a few sessions + usage bars (hero image)
 - `usage.png` — the 5h/7d bars (Claude + Codex)
-- `menu.png` — the right-click ⚙ menu
+- `menubutton.png` — the right-click ⚙ menu
+- `videoopenandclosingapp.mp4` — short demo of opening/closing the app
 
-Keep them reasonably small (< 1 MB each).
+Keep images reasonably small (< 1 MB each). Note: a committed `.mp4` does **not** auto-embed
+via `![](...)` markdown on GitHub — it's linked instead (clicking plays it in GitHub's file
+viewer). For a true inline player, drag the video into the README on github.com's web editor;
+GitHub then hosts it and gives an embeddable `user-attachments` URL.
