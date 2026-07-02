@@ -1,0 +1,38 @@
+# .NET (phases 2-4)
+bin/
+obj/
+*.user
+publish/
+artifacts/
+
+# OS / editor
+Thumbs.db
+.DS_Store
+.idea/
+.vs/
+*.swp
+
+# Local runtime / logs
+*.log
+myagents-diagnostics-*.txt
+
+# Local-only notes (never published)
+*.local.md
+
+# SECRETS — must never be committed (the app reads these locally; keep them out of git).
+# A leaked OAuth token in commit history is not fixable by deleting it later.
+.credentials.json
+auth.json
+*.credentials.json
+**/.claude/.credentials.json
+**/.codex/auth.json
+*.key
+*.pem
+.env
+.env.*
+secrets.*
+*.secret
+
+# Test fixtures that may capture real session/credential data
+**/fixtures/**/sessions.d/
+**/*real*token*

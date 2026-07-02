@@ -1,0 +1,15 @@
+# winget installer manifest. The app ships as a self-contained single .exe, so we
+# use the "portable" installer type (winget tracks it and adds the command alias).
+# Fill InstallerUrl + InstallerSha256 at release time:
+#   (Get-FileHash .\MyAgents.exe -Algorithm SHA256).Hash
+PackageIdentifier: MiguelAngelRamirez.MyAgents
+PackageVersion: "0.1.0"
+InstallerType: portable
+Commands:
+  - myagents
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/OWNER/REPO/releases/download/v0.1.0/MyAgents.exe
+    InstallerSha256: REPLACE_WITH_SHA256
+ManifestType: installer
+ManifestVersion: 1.6.0

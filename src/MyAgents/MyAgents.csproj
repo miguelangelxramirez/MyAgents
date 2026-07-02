@@ -1,0 +1,64 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- WPF for the premium UI; WinForms only for the tray NotifyIcon. -->
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AssemblyName>MyAgents</AssemblyName>
+    <RootNamespace>MyAgents</RootNamespace>
+    <Version>0.3.0</Version>
+    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+
+    <!-- Memory footprint: this is a tiny always-on tray app, so favour low RAM over GC
+         throughput. Workstation, non-concurrent GC (no background heap) + return freed
+         pages to the OS. Invariant globalization drops the ICU load. These trim the
+         working set; WPF + a self-contained runtime still has a real floor (~150-250 MB)
+         that can't be cut without dropping WPF. -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+    <RetainVMGarbageCollection>false</RetainVMGarbageCollection>
+    <TieredCompilation>true</TieredCompilation>
+    <TieredPGO>false</TieredPGO>
+    <!-- NOTE: InvariantGlobalization MUST stay off — WPF data binding crashes under it
+         ("Cannot find non-neutral culture related to 'en-us'"). It also gave ~0 RAM benefit. -->
+    <EventSourceSupport>false</EventSourceSupport>
+    <HttpActivityPropagationSupport>false</HttpActivityPropagationSupport>
+    <MetadataUpdaterSupport>false</MetadataUpdaterSupport>
+    <!-- UIAutomation assemblies are provided by both the WPF and WinForms desktop
+         packs; the dual-resolution is harmless, so demote the MSB warnings. -->
+    <MSBuildWarningsAsMessages>MSB3245;MSB3243</MSBuildWarningsAsMessages>
+  </PropertyGroup>
+
+  <!-- WinForms is on only for the tray NotifyIcon; drop its implicit usings so
+       System.Drawing/Forms types don't clash with WPF (Brush, Color, …). We
+       reference them via explicit aliases (Drawing./Forms.) in App.xaml.cs. -->
+  <ItemGroup>
+    <Using Remove="System.Drawing" />
+    <Using Remove="System.Windows.Forms" />
+  </ItemGroup>
+
+  <!-- UI Automation: used to select the exact Windows Terminal TAB of a session. -->
+  <ItemGroup>
+    <Reference Include="UIAutomationClient" />
+    <Reference Include="UIAutomationTypes" />
+  </ItemGroup>
+
+  <!-- Hook scripts embedded in the exe so the app can self-install them
+       (into Windows and every WSL distro) — the user never runs them by hand. -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\hooks\_common.js"><LogicalName>ccapp._common.js</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="..\..\hooks\update.js"><LogicalName>ccapp.update.js</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="..\..\hooks\lifecycle.js"><LogicalName>ccapp.lifecycle.js</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="..\..\hooks\statusline.js"><LogicalName>ccapp.statusline.js</LogicalName></EmbeddedResource>
+  </ItemGroup>
+
+  <!-- Distribution build (see README): publish Release, win-x64, self-contained,
+       single file. Produces one MyAgents.exe; end users need no .NET install. -->
+
+</Project>

@@ -1,0 +1,24 @@
+PackageIdentifier: MiguelAngelRamirez.MyAgents
+PackageVersion: "0.1.0"
+PackageLocale: en-US
+Publisher: Miguel Angel Ramirez
+PublisherUrl: https://github.com/OWNER
+PackageName: MyAgents
+PackageUrl: https://github.com/OWNER/REPO
+License: MIT
+LicenseUrl: https://github.com/OWNER/REPO/blob/main/LICENSE
+ShortDescription: Windows tray app that monitors all your Claude Code and Codex CLI sessions at once — live status, click-to-focus, and official 5h/7d usage bars.
+Description: >-
+  A lightweight Windows tray app that shows every running Claude Code and Codex
+  session (in WSL and native Windows) with live status, lets you click a session
+  to focus its terminal, and shows official 5h/7d usage bars captured from each
+  CLI's own data — no tokens read, no undocumented endpoints called.
+Tags:
+  - claude
+  - claude-code
+  - codex
+  - cli
+  - productivity
+  - wsl
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0
