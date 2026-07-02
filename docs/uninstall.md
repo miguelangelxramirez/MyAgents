@@ -16,7 +16,8 @@ Tray icon → **Uninstall hooks**. Then quit the app. That reverts everything be
 | `~/.claude/settings.json` → `statusLine` | our wrapper; your original saved to `~/.claude/statusbar/orig-statusline.txt` | **your original command is restored** (padding/other fields kept); sidecar deleted. If you had none, ours is removed |
 | `~/.claude/statusbar/` | `_common.js`, `update.js`, `lifecycle.js`, `statusline.js`, `sessions.d/`, `usage.json` | safe to delete the whole `statusbar/` folder |
 | `/etc/codex/requirements.toml` + `/etc/codex/cchooks/` (only if Codex tracking was on) | managed hooks, **marker-guarded** | removed only if they carry our marker — a foreign/enterprise `requirements.toml` is never touched |
-| `%APPDATA%\ClaudeCodeApp\settings.json` | the app's own UI prefs | delete the folder to remove |
+| `%APPDATA%\MyAgents\settings.json` | the app's own UI prefs | delete the folder to remove |
+| Start menu → `MyAgents.lnk` | a shortcut so you can reopen it after closing | removed by **Uninstall hooks** |
 
 We never write tokens anywhere, and the public build never calls a usage endpoint.
 

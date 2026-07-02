@@ -9,7 +9,7 @@ Commands:
   - myagents
 Installers:
   - Architecture: x64
-    InstallerUrl: https://github.com/OWNER/REPO/releases/download/v0.1.0/MyAgents.exe
-    InstallerSha256: REPLACE_WITH_SHA256
+    InstallerUrl: https://github.com/miguelangelxramirez/MyAgents/releases/download/v0.1.0/MyAgents.exe
+    InstallerSha256: 28CDC3C64DE851D91700EA29E1E57413D5F53BE41863C2A57750CFC3339AEA8E
 ManifestType: installer
 ManifestVersion: 1.6.0

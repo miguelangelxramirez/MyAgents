@@ -102,6 +102,7 @@ public partial class App : System.Windows.Application
         else HookInstaller.UninstallCodexManagedInBackground();
 
         StartupManager.MigrateLegacyName();   // clean up any pre-rename "ClaudeCodeApp" autostart entry
+        ShortcutManager.EnsureStartMenuShortcut();   // so the user can reopen it from the Start menu after closing
         BuildTray();
         _widget.SettingsRequested += () =>
         {
@@ -201,6 +202,7 @@ public partial class App : System.Windows.Application
         {
             HookInstaller.UninstallInBackground();
             HookInstaller.UninstallCodexManagedInBackground();
+            ShortcutManager.RemoveStartMenuShortcut();
             _tray.ShowBalloonTip(4000, "MyAgents", "Hooks removed. Restart your sessions to clear them.", Forms.ToolTipIcon.Info);
         });
         menu.Items.Add(new Forms.ToolStripSeparator());

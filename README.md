@@ -53,12 +53,20 @@ and/or a **Codex** plan (the same accounts the CLIs use).
 winget install MiguelAngelRamirez.MyAgents
 ```
 
-Or download the latest `MyAgents.exe` from the [Releases](https://github.com/OWNER/REPO/releases) page and run it directly (it's a self-contained single file — no install needed).
+**After installing with winget, run it once:** press **⊞ Win + R**, type `myagents`, and press Enter (or run
+`myagents` in any terminal). From then on it lives in your tray, adds itself to the **Start menu** (press
+**⊞ Win** and type "MyAgents" to reopen it), and — if you enable **Start with Windows** — launches on boot.
+
+Or download the latest `MyAgents.exe` from the [Releases](https://github.com/miguelangelxramirez/MyAgents/releases) page and run it directly (it's a self-contained single file — no install needed).
 
 ## Use
 
 Launch it (double-click the exe / the **MyAgents** shortcut, or `winget`-installed command). It appears as a
 **robot icon in the tray** and a **widget in the bottom-right corner**.
+
+> **Reopening it after you close it:** on first launch it adds itself to the **Start menu**, so just press
+> **Start** and type **"MyAgents"** to open it again anytime. (Enabling **Start with Windows**, below, means
+> you rarely need to.)
 
 - **Click a session row** → focuses that session's terminal tab.
 - **Click the tray robot** → shows/hides the widget. (Re-running the exe also brings the widget to the front — a reliable way to open it.)

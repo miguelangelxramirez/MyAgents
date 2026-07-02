@@ -2,11 +2,11 @@ PackageIdentifier: MiguelAngelRamirez.MyAgents
 PackageVersion: "0.1.0"
 PackageLocale: en-US
 Publisher: Miguel Angel Ramirez
-PublisherUrl: https://github.com/OWNER
+PublisherUrl: https://github.com/miguelangelxramirez
 PackageName: MyAgents
-PackageUrl: https://github.com/OWNER/REPO
+PackageUrl: https://github.com/miguelangelxramirez/MyAgents
 License: MIT
-LicenseUrl: https://github.com/OWNER/REPO/blob/main/LICENSE
+LicenseUrl: https://github.com/miguelangelxramirez/MyAgents/blob/main/LICENSE
 ShortDescription: Windows tray app that monitors all your Claude Code and Codex CLI sessions at once — live status, click-to-focus, and official 5h/7d usage bars.
 Description: >-
   A lightweight Windows tray app that shows every running Claude Code and Codex
