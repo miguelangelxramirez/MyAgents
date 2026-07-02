@@ -15,6 +15,11 @@ Works whether you run the CLIs in **WSL** or **native Windows (PowerShell)**.
 
 ---
 
+
+
+https://github.com/user-attachments/assets/350c4716-db66-4904-97b3-0ead7a5e613e
+
+
 ## What you get
 
 - **One panel for every session.** A live row per Claude Code / Codex session across all your terminals — its **name**, **folder**, and **state** (thinking, tool, awaiting permission, idle).
