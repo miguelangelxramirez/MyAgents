@@ -19,6 +19,13 @@ myagents-diagnostics-*.txt
 # Local-only notes (never published)
 *.local.md
 
+# Internal AppsXcode methodology (working state — local only, NEVER in the public repo)
+/CLAUDE.md
+/AGENTS.md
+/CONTEXT.md
+/.claude/
+/Docs/Archive/
+
 # SECRETS — must never be committed (the app reads these locally; keep them out of git).
 # A leaked OAuth token in commit history is not fixable by deleting it later.
 .credentials.json
