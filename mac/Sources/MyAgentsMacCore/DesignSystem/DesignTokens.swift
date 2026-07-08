@@ -30,6 +30,24 @@ public enum DesignTokens {
         public static let usageWarn = Color(red: 232/255, green: 170/255, blue: 80/255)
         public static let usageHigh = Color(red: 226/255, green: 108/255, blue: 108/255)
 
+        /// Very low-alpha amber wash behind a row that `needsAttention`, so the whole row (not just
+        /// a dot) reads as "this one wants you" — a hue, not an opaque fill, so the system material
+        /// still shows through. Derived from `permission` on purpose (single source of the amber).
+        public static let attentionRowTint = permission.opacity(0.14)
+
+        /// Hairline separators / usage-bar troughs — a faint neutral that works on the material in
+        /// both appearances without a hard opaque line.
+        public static let hairline = adaptive(
+            light: NSColor(calibratedWhite: 0.0, alpha: 0.10),
+            dark: NSColor(calibratedWhite: 1.0, alpha: 0.12)
+        )
+
+        /// Track behind a usage bar's fill.
+        public static let usageTrack = adaptive(
+            light: NSColor(calibratedWhite: 0.0, alpha: 0.08),
+            dark: NSColor(calibratedWhite: 1.0, alpha: 0.10)
+        )
+
         /// Semantic popover background, light/dark aware.
         public static let background = adaptive(
             light: NSColor(calibratedWhite: 1.00, alpha: 1),
@@ -76,5 +94,47 @@ public enum DesignTokens {
         public static let title = Font.system(size: 13, weight: .semibold)
         public static let body = Font.system(size: 12, weight: .regular)
         public static let caption = Font.system(size: 11, weight: .regular)
+        /// Uppercased section label (usage header). Small, tracked, muted in use.
+        public static let sectionHeader = Font.system(size: 10, weight: .semibold)
+        /// Row name — a touch heavier than `body` so the session name anchors each row.
+        public static let rowTitle = Font.system(size: 12, weight: .medium)
+        /// Elapsed timer / percentages — monospaced digits so a live-updating value never jitters
+        /// the layout as digits change width.
+        public static let monoCaption = Font.system(size: 11, weight: .regular).monospacedDigit()
+    }
+
+    /// Corner radii — the only place rounded-rect literals live (design-token law: no magic radius
+    /// in a view).
+    public enum Radius {
+        public static let small: CGFloat = 5
+        public static let medium: CGFloat = 8
+        public static let large: CGFloat = 12
+    }
+
+    /// Fixed pixel metrics that aren't spacing (bar widths/heights, dot sizes, the popover width).
+    /// Kept out of `Spacing` because they're not on the 8pt gap grid — they're component sizes.
+    public enum Metrics {
+        /// Popover content width. Roomy enough for a folder path + state without wrapping, narrow
+        /// enough to feel like a menu, not a window.
+        public static let popoverWidth: CGFloat = 300
+        /// Left provider accent bar.
+        public static let accentBarWidth: CGFloat = 3
+        public static let accentBarHeight: CGFloat = 34
+        /// Usage progress bar.
+        public static let usageBarHeight: CGFloat = 5
+        /// Pending / activity dot.
+        public static let dotSize: CGFloat = 7
+        /// Menu-bar glyph point size (drawn into the status item image).
+        public static let glyphPointSize: CGFloat = 15
+        /// Font size of the composed "% badge" text drawn next to the menu-bar glyph.
+        public static let glyphBadgeFontSize: CGFloat = 9
+        /// Max height of the scrolling session list before it scrolls instead of growing.
+        public static let popoverMaxListHeight: CGFloat = 320
+        /// Fixed columns in a usage row so bars line up across providers.
+        public static let usageLabelWidth: CGFloat = 24
+        public static let usageValueWidth: CGFloat = 36
+        /// Decorative SF Symbol sizes for the onboarding hero and the empty-state illustration.
+        public static let heroGlyphPointSize: CGFloat = 26
+        public static let emptyGlyphPointSize: CGFloat = 22
     }
 }

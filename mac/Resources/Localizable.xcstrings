@@ -1,148 +1,262 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "about.build-date" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Built %@" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Compilado el %@" } }
+      }
+    },
+    "about.ok" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "OK" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Aceptar" } }
+      }
+    },
+    "about.version" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Version %@ (%@)" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Versión %@ (%@)" } }
+      }
+    },
     "buildinfo.unknown-date" : {
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "unknown build date"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "fecha de compilación desconocida"
-          }
-        }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "unknown build date" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "fecha de compilación desconocida" } }
+      }
+    },
+    "glyph.a11y.attention" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "MyAgents — a session is awaiting permission" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "MyAgents: una sesión está esperando permiso" } }
+      }
+    },
+    "glyph.a11y.busy" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "MyAgents — a session is working" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "MyAgents: una sesión está trabajando" } }
+      }
+    },
+    "glyph.a11y.idle" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "MyAgents" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "MyAgents" } }
+      }
+    },
+    "hooks.result.install-failed" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Couldn't enable tracking" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "No se pudo activar el seguimiento" } }
+      }
+    },
+    "hooks.result.installed" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Tracking enabled" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Seguimiento activado" } }
+      }
+    },
+    "hooks.result.remove-failed" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Couldn't remove tracking" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "No se pudo quitar el seguimiento" } }
+      }
+    },
+    "hooks.result.removed" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Tracking removed" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Seguimiento quitado" } }
+      }
+    },
+    "hooks.result.repair-failed" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Couldn't repair tracking" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "No se pudo reparar el seguimiento" } }
+      }
+    },
+    "hooks.result.repaired" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Tracking repaired" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Seguimiento reparado" } }
+      }
+    },
+    "login.toggle-failed" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Couldn't change the start-at-login setting" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "No se pudo cambiar el ajuste de inicio" } }
+      }
+    },
+    "menu.about" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "About MyAgents" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Acerca de MyAgents" } }
+      }
+    },
+    "menu.hooks.enable" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Enable tracking" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Activar seguimiento" } }
+      }
+    },
+    "menu.hooks.remove" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Remove tracking" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Quitar seguimiento" } }
+      }
+    },
+    "menu.hooks.repair" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Repair tracking" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Reparar seguimiento" } }
       }
     },
     "menu.quit" : {
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Quit MyAgents"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Salir de MyAgents"
-          }
-        }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Quit MyAgents" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Salir de MyAgents" } }
+      }
+    },
+    "menu.settings.a11y" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Settings" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Ajustes" } }
+      }
+    },
+    "menu.show-usage" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Show usage" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Mostrar uso" } }
+      }
+    },
+    "menu.start-at-login" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Open at login" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Abrir al iniciar sesión" } }
       }
     },
     "menu.title" : {
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "MyAgents"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "MyAgents"
-          }
-        }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "MyAgents" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "MyAgents" } }
+      }
+    },
+    "notification.permission.body" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "%@ is waiting for your approval." } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "%@ está esperando tu aprobación." } }
+      }
+    },
+    "notification.permission.body-generic" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "A session is waiting for your approval." } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Una sesión está esperando tu aprobación." } }
+      }
+    },
+    "notification.permission.title" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Permission requested" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Permiso solicitado" } }
+      }
+    },
+    "onboarding.body" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "MyAgents adds a few local hooks to ~/.claude so it can show what each Claude Code and Codex session is doing. Everything stays on your Mac — no tokens, no network." } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "MyAgents añade unos hooks locales en ~/.claude para mostrar qué hace cada sesión de Claude Code y Codex. Todo se queda en tu Mac: sin tokens ni conexión." } }
+      }
+    },
+    "onboarding.enable" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Enable tracking" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Activar seguimiento" } }
+      }
+    },
+    "onboarding.title" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Watch your agent sessions" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Vigila tus sesiones de agentes" } }
+      }
+    },
+    "session.untitled" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Session" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Sesión" } }
       }
     },
     "sessions.empty" : {
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "No active sessions"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Sin sesiones activas"
-          }
-        }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "No active sessions" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Sin sesiones activas" } }
       }
     },
     "state.ended" : {
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ended"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Finalizada"
-          }
-        }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Ended" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Finalizada" } }
       }
     },
     "state.idle" : {
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Idle"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Inactivo"
-          }
-        }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Idle" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Inactivo" } }
       }
     },
     "state.permission" : {
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Awaiting permission"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Esperando permiso"
-          }
-        }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Awaiting permission" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Esperando permiso" } }
       }
     },
     "state.thinking" : {
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Thinking…"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Pensando…"
-          }
-        }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Thinking…" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Pensando…" } }
       }
     },
     "state.tool" : {
       "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Running tool"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ejecutando herramienta"
-          }
-        }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Running tool" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Ejecutando herramienta" } }
+      }
+    },
+    "usage.claude" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Claude" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Claude" } }
+      }
+    },
+    "usage.codex" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Codex" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Codex" } }
+      }
+    },
+    "usage.header" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Usage" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Uso" } }
+      }
+    },
+    "usage.stale" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "· %lld min ago" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "· hace %lld min" } }
+      }
+    },
+    "usage.unknown" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "—" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "—" } }
+      }
+    },
+    "usage.window.5h" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "5 h" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "5 h" } }
+      }
+    },
+    "usage.window.7d" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "7 d" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "7 d" } }
       }
     }
   },
