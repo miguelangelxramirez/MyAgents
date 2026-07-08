@@ -92,6 +92,7 @@ public struct SessionScanner: Sendable {
             id: wire.sessionId.isEmpty ? fileStem : wire.sessionId,
             name: wire.name,
             folder: folder,
+            cwd: wire.cwd,
             provider: wire.provider,
             state: wire.state,
             toolLabel: wire.label.isEmpty ? wire.tool : wire.label,

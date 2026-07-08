@@ -9,14 +9,26 @@ import AppKit
 public enum DesignTokens {
 
     public enum Colors {
-        /// Anthropic/Claude accent — provider colour for the left accent bar, badges, etc.
-        /// TODO(Hito 1): confirm the exact brand hex against the shipped Windows tray icon.
-        public static let claudeOrange = Color(red: 0.82, green: 0.42, blue: 0.31)
+        // Provider + state accents are the EXACT values shipped in the Windows product
+        // (`src/MyAgents/Ui/Palette.cs`) so both platforms read identically. Appearance-independent
+        // (same in light/dark) — they are brand/semantic accents, not surfaces.
 
-        /// OpenAI Codex accent — provider colour, teal per the Windows reference (README: "Claude
-        /// orange / Codex teal").
-        /// TODO(Hito 1): confirm the exact brand hex against the shipped Windows tray icon.
-        public static let codexTeal = Color(red: 0.15, green: 0.55, blue: 0.55)
+        /// Anthropic/Claude accent — provider colour for the left accent bar, badges, busy glyph.
+        /// Windows `ProviderClaude`/`Busy` = RGB(217,119,87) = #D97757.
+        public static let claudeOrange = Color(red: 217/255, green: 119/255, blue: 87/255)
+
+        /// OpenAI Codex accent — Windows `ProviderCodex` = RGB(64,196,180) = #40C4B4.
+        public static let codexTeal = Color(red: 64/255, green: 196/255, blue: 180/255)
+
+        /// Awaiting-permission accent (attention). Windows `Permission` = RGB(235,190,70) = #EBBE46.
+        public static let permission = Color(red: 235/255, green: 190/255, blue: 70/255)
+
+        /// Idle/ready accent. Windows `Idle` = RGB(120,120,128).
+        public static let idle = Color(red: 120/255, green: 120/255, blue: 128/255)
+
+        /// Usage bar warning / high thresholds. Windows `UsageWarn` / `UsageHigh`.
+        public static let usageWarn = Color(red: 232/255, green: 170/255, blue: 80/255)
+        public static let usageHigh = Color(red: 226/255, green: 108/255, blue: 108/255)
 
         /// Semantic popover background, light/dark aware.
         public static let background = adaptive(

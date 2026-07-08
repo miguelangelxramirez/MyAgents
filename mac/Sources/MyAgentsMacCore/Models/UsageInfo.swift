@@ -21,13 +21,21 @@ public struct UsageInfo: Equatable, Sendable {
     /// When this reading was captured. `nil` for a live source (direct RPC) or when unknown.
     public let capturedAt: Date?
 
+    /// `true` when this reading is old enough that the UI should show it "greyed out, N minutes
+    /// ago" instead of as fresh (mirrors the Windows tray's stale-usage treatment — see
+    /// `ClaudeUsageService`/`CodexUsageService`). The percentages themselves are still the last
+    /// real values: staleness NEVER drops a known reading back to "—". Always `false` for a value
+    /// with no meaningful age (e.g. `.unknown`, or a just-fetched live RPC reading).
+    public let isStale: Bool
+
     public init(
         provider: Provider,
         fiveHourPercent: Double? = nil,
         fiveHourResetsAt: Date? = nil,
         sevenDayPercent: Double? = nil,
         sevenDayResetsAt: Date? = nil,
-        capturedAt: Date? = nil
+        capturedAt: Date? = nil,
+        isStale: Bool = false
     ) {
         self.provider = provider
         self.fiveHourPercent = fiveHourPercent
@@ -35,6 +43,7 @@ public struct UsageInfo: Equatable, Sendable {
         self.sevenDayPercent = sevenDayPercent
         self.sevenDayResetsAt = sevenDayResetsAt
         self.capturedAt = capturedAt
+        self.isStale = isStale
     }
 
     /// The canonical "we have no reading yet" value — every field `nil`, never `0`.

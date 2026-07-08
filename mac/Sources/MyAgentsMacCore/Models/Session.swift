@@ -14,6 +14,11 @@ public struct Session: Identifiable, Equatable, Sendable {
     public var name: String
     /// Basename of the working directory (`project` in the wire format).
     public var folder: String
+    /// Full working directory path (`cwd` in the wire format). Kept alongside `folder` (the
+    /// display basename) because the process-liveness join (`SessionLivenessJoin`) needs the full
+    /// path to match a pid-less session to a live process by provider+cwd — a basename alone
+    /// collides across projects with the same folder name.
+    public var cwd: String
     public var provider: Provider
     public var state: SessionActivityState
     /// Human-facing label for the current activity (e.g. "Editing", "Running command"); falls
@@ -30,6 +35,7 @@ public struct Session: Identifiable, Equatable, Sendable {
         id: String,
         name: String = "",
         folder: String = "",
+        cwd: String = "",
         provider: Provider = .claude,
         state: SessionActivityState = .idle,
         toolLabel: String = "",
@@ -41,6 +47,7 @@ public struct Session: Identifiable, Equatable, Sendable {
         self.id = id
         self.name = name
         self.folder = folder
+        self.cwd = cwd
         self.provider = provider
         self.state = state
         self.toolLabel = toolLabel
@@ -48,5 +55,21 @@ public struct Session: Identifiable, Equatable, Sendable {
         self.updatedAt = updatedAt
         self.ownerPid = ownerPid
         self.pending = pending
+    }
+
+    // MARK: - Derived flags (mirror `SessionState.cs`'s `NeedsAttention`/`IsBusy`/`IsStale`)
+
+    /// `true` when this session needs a human right now.
+    public var needsAttention: Bool { state.needsAttention }
+
+    /// `true` while the agent is actively doing work (thinking or running a tool).
+    public var isBusy: Bool { state.isBusy }
+
+    /// `true` if we haven't heard from this session in longer than `threshold` — a crash-safety
+    /// net so a session whose process died without a clean end event doesn't sit "thinking"
+    /// forever in the UI.
+    public func isStale(asOf now: Date = Date(), threshold: TimeInterval) -> Bool {
+        guard let updatedAt else { return false }
+        return now.timeIntervalSince(updatedAt) > threshold
     }
 }
