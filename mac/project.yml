@@ -13,8 +13,22 @@ settings:
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: "1"
     ENABLE_HARDENED_RUNTIME: YES
+    DEVELOPMENT_TEAM: 2BYX29N42C
     CODE_SIGN_STYLE: Automatic
     SWIFT_EMIT_LOC_STRINGS: YES
+  # Debug stays on Automatic (Xcode picks an Apple Development/ad-hoc identity from whatever
+  # account is logged in) so local builds/tests never depend on the Developer ID cert. Release
+  # is pinned to manual Developer ID signing — this is the ONLY configuration `build-release.sh`
+  # (see mac/scripts/build-release.sh) ever archives/exports, and it's also what HITO 3's ad-hoc
+  # verification build overrides on the CLI (CODE_SIGNING_ALLOWED=NO) to prove Release compiles
+  # without requiring Miguel's not-yet-created "Developer ID Application" certificate.
+  configs:
+    Debug:
+      CODE_SIGN_STYLE: Automatic
+    Release:
+      CODE_SIGN_STYLE: Manual
+      CODE_SIGN_IDENTITY: "Developer ID Application"
+      OTHER_CODE_SIGN_FLAGS: "--timestamp"
 
 targets:
   MyAgentsMacCore:
@@ -58,12 +72,16 @@ targets:
       # (it was silently never copied into the app bundle since Hito 0/Round 1).
       - path: Resources/Localizable.xcstrings
         buildPhase: resources
+      # Asset catalog (AppIcon) — XcodeGen recognizes `.xcassets` and puts it in the resources
+      # build phase automatically regardless of `buildPhase:` (unlike plain files above).
+      - path: Resources/Assets.xcassets
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.miguelangelramirez.myagents.mac
         PRODUCT_NAME: MyAgentsMac
         INFOPLIST_FILE: Resources/Info.plist
         GENERATE_INFOPLIST_FILE: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
     dependencies:
       - target: MyAgentsMacCore

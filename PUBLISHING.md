@@ -1,4 +1,4 @@
-# Publishing checklist (free public repo + winget)
+# Publishing checklist (free public repo + winget + Homebrew)
 
 Do these **in order**. Step 0 is blocking — do not push public until it passes.
 
@@ -134,9 +134,83 @@ winget install --manifest packaging\winget   # local install test
 # then: wingetcreate submit, or PR the manifests into winget-pkgs
 ```
 
-## 5. Code signing — optional, NOT a gate for free OSS
+## 5. Code signing — optional, NOT a gate for free OSS (Windows)
 
 An unsigned exe trips SmartScreen ("unrecognized app"). For a free, open-source
 tool distributed via GitHub Releases this is acceptable: trust comes from the
 open code, a transparent README, and a clean uninstaller — not a certificate.
 Revisit an EV cert only if/when this becomes a more formal product.
+
+---
+
+## macOS release checklist (Developer ID + notarization + Homebrew)
+
+Unlike Windows, an unsigned/unnotarized macOS app is **not a soft warning** — Gatekeeper
+refuses to launch it at all on any Mac other than the one that built it (`"MyAgentsMac.app"
+can't be opened because Apple cannot check it for malicious software`). So for macOS this
+IS a gate: every public release must be Developer ID signed + notarized. Everything below
+this point that doesn't need the certificate itself (project signing config, the release
+script, the icon, the cask template, `mac/README.md`) is already done (HITO 3) — what's left
+is the steps that only Miguel can do (they need his Apple Developer account).
+
+### One-time setup (do once per machine/account)
+
+1. **Create the "Developer ID Application" certificate** (Miguel does not yet have one — only
+   Apple Development/Distribution certs exist as of writing). Requires the paid **Apple Developer
+   Program** membership (team `2BYX29N42C`):
+   - developer.apple.com/account/resources/certificates/list → **+** → **Developer ID
+     Application** → follow the CSR flow (or use Xcode → Settings → Accounts → *Manage
+     Certificates* → **+** → **Developer ID Application**, which handles the CSR for you).
+   - Confirm it landed in your login keychain:
+     `security find-identity -v -p codesigning` should list
+     `"Developer ID Application: Miguel Ángel Ramírez (2BYX29N42C)"`.
+2. **Store notarytool credentials** (once; never put a password in a script or commit):
+   ```bash
+   xcrun notarytool store-credentials "myagents-notary" \
+       --apple-id "<your Apple ID email>" \
+       --team-id "2BYX29N42C" \
+       --password "<an app-specific password from appleid.apple.com>"
+   ```
+   (An App Store Connect API key also works instead of `--apple-id`/`--password` — see
+   `xcrun notarytool store-credentials --help`. Either way the secret lives ONLY in the keychain,
+   referenced later by profile name `myagents-notary`.)
+3. **Create your Homebrew tap** (once): `brew tap-new miguelangelxramirez/tap`, then copy
+   `mac/dist/Casks/myagents.rb` into that repo's `Casks/myagents.rb` and push it.
+
+### Per-release steps
+
+1. Bump `MARKETING_VERSION` in `mac/project.yml` if this is a new version, and confirm
+   `mac/CHANGELOG`-equivalent (commit messages / release notes) reflects what changed.
+2. Run the release script from the `mac/` directory:
+   ```bash
+   cd mac
+   ./scripts/build-release.sh
+   ```
+   This does `xcodegen generate` → archive (Release, Developer ID) → export
+   (`method: developer-id`) → zip (`ditto`) → `xcrun notarytool submit --wait` → staple → re-zip →
+   prints the **version** and **sha256** of the final zip. It fails loudly (with the exact fix
+   command) if the cert or the notary profile is missing — it never falls back to ad-hoc signing.
+3. Tag the release: `git tag v<version> && git push origin v<version>`.
+4. Create the GitHub release for that tag and upload `mac/build/MyAgentsMac-<version>.zip`
+   as the release asset.
+5. Update `mac/dist/Casks/myagents.rb` (in this repo, as the template) **and** the copy in
+   `miguelangelxramirez/homebrew-tap`'s `Casks/myagents.rb`: set `version` and `sha256` to the
+   values `build-release.sh` printed. Push both.
+6. Sanity-check before telling anyone it's out:
+   ```bash
+   brew uninstall --cask myagents 2>/dev/null; brew untap miguelangelxramirez/tap 2>/dev/null
+   brew install --cask miguelangelxramirez/tap/myagents   # fresh install from the tap
+   open -a MyAgents                                       # launches with no Gatekeeper warning
+   xcrun stapler validate /Applications/MyAgentsMac.app   # confirms the staple is valid offline
+   ```
+
+### What's already done vs. what's Miguel-only
+
+- ✅ Done (HITO 3, this repo): Release signing config in `mac/project.yml` (Developer ID identity
+  + manual style, Debug stays Automatic), no entitlements file (confirmed unnecessary — see
+  `mac/README.md`/CONTEXT.md D5), `mac/scripts/build-release.sh`, the generated `AppIcon`,
+  `mac/dist/Casks/myagents.rb` template, `mac/README.md`. Verified: Debug tests green, an
+  ad-hoc/no-signing Release build compiles.
+- ⛔ Miguel-only (needs his Apple Developer account, cannot be done by an agent): create the
+  Developer ID Application certificate, run `notarytool store-credentials`, create the Homebrew
+  tap repo, run `build-release.sh` for real, create the GitHub release, push the filled-in cask.
