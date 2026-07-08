@@ -110,6 +110,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             model.refreshStatus()
             NSApp.activate(ignoringOtherApps: true)
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            // Make the popover window key so SwiftUI controls INSIDE it (the session-row buttons,
+            // which live in a ScrollView) receive the click. Without this, an LSUIElement app's
+            // transient popover window isn't key and the first click on a row is swallowed — the
+            // symptom Miguel hit: "clicking a session does nothing" (no focus, no log).
+            popover.contentViewController?.view.window?.makeKey()
         }
     }
 
@@ -117,6 +122,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// tab where the terminal's scripting allows — to the front. The focus runs off the main thread
     /// (Apple Events round-trip / app lookup); a failure shows a localized note, never a crash.
     private func activate(_ session: Session) {
+        // `.notice` (persisted, unlike `.info`) so a click is verifiable in `log show` — this path
+        // silently not running was exactly what made the "clicks do nothing" bug hard to see.
+        logger.notice("row click → activate session \(session.id, privacy: .public) host=\(session.terminalHost, privacy: .public)")
         // The click is the "opened" signal: clear pending immediately regardless of focus outcome.
         sessionStore.markSeen(session.id)
 
@@ -134,9 +142,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func handleFocusResult(_ result: TerminalFocusResult, sessionID: String) {
         switch result {
         case .focusedTab, .focusedWindow, .appActivatedOnly:
-            logger.debug("Focus \(sessionID, privacy: .public): \(String(describing: result), privacy: .public)")
+            logger.notice("Focus \(sessionID, privacy: .public): \(String(describing: result), privacy: .public)")
         case .failed(let reason):
-            logger.info("Focus \(sessionID, privacy: .public) failed: \(String(describing: reason), privacy: .public)")
+            logger.notice("Focus \(sessionID, privacy: .public) failed: \(String(describing: reason), privacy: .public)")
             model.showTransientMessage(String(localized: "focus.failed", defaultValue: "Couldn't open that session's terminal"))
         }
     }
