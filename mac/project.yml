@@ -1,0 +1,79 @@
+name: MyAgentsMac
+options:
+  bundleIdPrefix: com.miguelangelramirez.myagents
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: false
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MACOSX_DEPLOYMENT_TARGET: "26.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    ENABLE_HARDENED_RUNTIME: YES
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_EMIT_LOC_STRINGS: YES
+
+targets:
+  MyAgentsMacCore:
+    type: framework
+    platform: macOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: Sources/MyAgentsMacCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.miguelangelramirez.myagents.mac.core
+        PRODUCT_NAME: MyAgentsMacCore
+        GENERATE_INFOPLIST_FILE: YES
+        SKIP_INSTALL: YES
+
+  MyAgentsMac:
+    type: application
+    platform: macOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: Sources/MyAgentsMac
+    resources:
+      - path: Resources/Localizable.xcstrings
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.miguelangelramirez.myagents.mac
+        PRODUCT_NAME: MyAgentsMac
+        INFOPLIST_FILE: Resources/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
+    dependencies:
+      - target: MyAgentsMacCore
+        embed: true
+
+  MyAgentsMacCoreTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: Tests/MyAgentsMacCoreTests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.miguelangelramirez.myagents.mac.core.tests
+        GENERATE_INFOPLIST_FILE: YES
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @loader_path/../Frameworks @loader_path/Frameworks"
+    dependencies:
+      - target: MyAgentsMacCore
+        embed: true
+
+schemes:
+  MyAgentsMac:
+    build:
+      targets:
+        MyAgentsMac: all
+        MyAgentsMacCoreTests: [test]
+    test:
+      targets:
+        - MyAgentsMacCoreTests
+    run:
+      config: Debug
+    archive:
+      config: Release

@@ -12,6 +12,19 @@ Thumbs.db
 .vs/
 *.swp
 
+# macOS port (Swift/Xcode) — XcodeGen: project.yml is the source of truth, .xcodeproj is generated
+*.xcodeproj/
+xcuserdata/
+*.xcuserstate
+DerivedData/
+.build/
+.swiftpm/
+mac/build/
+# Signing secrets — never commit
+*.p12
+*.provisionprofile
+Config.xcconfig
+
 # Local runtime / logs
 *.log
 myagents-diagnostics-*.txt
