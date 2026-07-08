@@ -1,19 +1,20 @@
 import AppKit
 import MyAgentsMacCore
 
-/// Draws (and, only while something is busy, animates) the status-bar glyph, plus an optional
-/// composed "% badge".
+/// Draws (and, only while something is busy, animates) the status-bar glyph.
 ///
 /// The animation is a frame-swap `Timer` that re-renders the `NSImage` each tick — Core Animation
 /// on a status-item button is unreliable, so we redraw the image ourselves (per HITO1_DESIGN).
 /// ENERGY LAW: the timer exists ONLY while `MenuBarStatus.shouldAnimate` (i.e. `.busy`); every
 /// other state sets a single static image and tears the timer down.
+///
+/// Fix 4 (live user feedback, 2026-07-09): the glyph no longer composes a "% badge" — usage now
+/// lives only in the popover's small top summary line (`PopoverRootView`), so this controller is
+/// just the state glyph again.
 @MainActor
 final class MenuBarGlyphController {
     private weak var button: NSStatusBarButton?
     private var status: MenuBarStatus = MenuBarStatus(kind: .idle, busyProvider: nil)
-    /// Claude 5-hour percent to badge, or `nil` to hide the badge (usage disabled / unknown).
-    private var badgePercent: Double?
 
     private var animationTimer: Timer?
     private var phase: CGFloat = 0
@@ -24,20 +25,16 @@ final class MenuBarGlyphController {
     }
 
     /// New data arrived. Re-evaluates the static/animated decision and redraws. Starting or
-    /// stopping the timer is driven purely by `status.shouldAnimate`. A no-op update (same status
-    /// and badge, not animating) skips the redraw so we don't reallocate an identical `NSImage`
-    /// on every poll — the animation timer owns redraws while busy.
-    func update(status: MenuBarStatus, badgePercent: Double?) {
-        let unchanged = hasRendered && status == self.status && badgePercent == self.badgePercent
+    /// stopping the timer is driven purely by `status.shouldAnimate`. A no-op update (same status,
+    /// not animating) skips the redraw so we don't reallocate an identical `NSImage` on every poll
+    /// — the animation timer owns redraws while busy.
+    func update(status: MenuBarStatus) {
+        let unchanged = hasRendered && status == self.status
         self.status = status
-        self.badgePercent = badgePercent
         if status.shouldAnimate {
             startAnimating()
         } else {
             stopAnimating()
-            if !unchanged { redraw() }
-            hasRendered = true
-            return
         }
         if !unchanged { redraw() }
         hasRendered = true
@@ -73,27 +70,20 @@ final class MenuBarGlyphController {
     // MARK: - Rendering
 
     private func redraw() {
-        let badge = badgeString
-        let symbol = symbolImage(alpha: pulseAlpha, forceColored: badge != nil)
-        button?.image = compose(symbol: symbol, badge: badge)
+        button?.image = symbolImage(alpha: pulseAlpha)
     }
 
-    private var badgeString: String? {
-        guard let badgePercent else { return nil }
-        return "\(Int(badgePercent.rounded()))%"
-    }
-
-    /// The tinted SF Symbol for the current state. Idle with no badge stays a *template* image so
-    /// the system tints it to match the menu bar (the crisp, native resting look); any other state
-    /// — or idle carrying a badge — is drawn coloured (non-template) per HITO1_DESIGN.
-    private func symbolImage(alpha: CGFloat, forceColored: Bool) -> NSImage {
+    /// The tinted SF Symbol for the current state. Idle stays a *template* image so the system
+    /// tints it to match the menu bar (the crisp, native resting look); any other state is drawn
+    /// coloured (non-template) per HITO1_DESIGN.
+    private func symbolImage(alpha: CGFloat) -> NSImage {
         let sizeConfig = NSImage.SymbolConfiguration(
             pointSize: DesignTokens.Metrics.glyphPointSize,
             weight: .semibold
         )
         let base = NSImage(systemSymbolName: status.symbolName, accessibilityDescription: accessibilityDescription)
 
-        if status.kind == .idle && !forceColored {
+        if status.kind == .idle {
             let image = base?.withSymbolConfiguration(sizeConfig) ?? NSImage()
             image.isTemplate = true
             return image
@@ -132,36 +122,4 @@ final class MenuBarGlyphController {
         }
     }
 
-    /// Composites the symbol and (optional) badge into one image. With no badge the symbol is
-    /// returned untouched so the idle template case keeps its system tinting.
-    private func compose(symbol: NSImage, badge: String?) -> NSImage {
-        guard let badge, !badge.isEmpty else { return symbol }
-
-        let font = NSFont.systemFont(ofSize: DesignTokens.Metrics.glyphBadgeFontSize, weight: .semibold)
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: font,
-            .foregroundColor: NSColor(DesignTokens.Colors.idle),
-        ]
-        let text = badge as NSString
-        let textSize = text.size(withAttributes: attributes)
-        let gap: CGFloat = DesignTokens.Spacing.xxs / 2
-        let height = max(symbol.size.height, textSize.height)
-        let width = symbol.size.width + gap + textSize.width
-
-        let image = NSImage(size: NSSize(width: width, height: height))
-        image.lockFocus()
-        symbol.draw(in: NSRect(
-            x: 0,
-            y: (height - symbol.size.height) / 2,
-            width: symbol.size.width,
-            height: symbol.size.height
-        ))
-        text.draw(
-            at: NSPoint(x: symbol.size.width + gap, y: (height - textSize.height) / 2),
-            withAttributes: attributes
-        )
-        image.unlockFocus()
-        image.isTemplate = false
-        return image
-    }
 }

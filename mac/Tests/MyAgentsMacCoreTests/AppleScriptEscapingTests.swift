@@ -38,15 +38,43 @@ final class AppleScriptEscapingTests: XCTestCase {
         let payload = #"x" & (do shell script "rm -rf ~") & ""#
         let escaped = AppleScriptString.escaped(payload)
         XCTAssertFalse(containsUnescapedQuote(escaped),
-                       "no bare quote may survive — otherwise `do shell script` would execute")
+                       "no bare quote may break out of the literal — otherwise `do shell script` would execute")
 
-        // And embedded in the real Terminal script, the payload appears only as an escaped literal.
-        let src = try XCTUnwrap(TerminalFocusScript.build(strategy: .appleTerminal, titleTag: payload))
-        XCTAssertTrue(src.contains(#"set theMarker to "\#(escaped)""#),
+        // And embedded in the real Terminal script via titleTag, the payload appears only as an
+        // escaped literal.
+        let src = try XCTUnwrap(TerminalFocusScript.build(strategy: .appleTerminal, title: "", titleTag: payload))
+        XCTAssertTrue(src.contains(#"contains "\#(escaped)""#),
                       "the marker must be interpolated exactly as the escaped literal")
         // The interpolated line must be the ONLY place a `do shell script` substring appears, and it
         // is inside quotes — never as a standalone statement.
         XCTAssertEqual(occurrences(of: "do shell script", in: src), 1)
+    }
+
+    /// The `title` (aiTitle) path is now the PRIMARY marker (Fix 1) — it must be escaped exactly as
+    /// rigorously as `titleTag` always was. An aiTitle is Claude's own task-summary text, so treat
+    /// it as HOSTILE too: same injection payload, now through the title parameter instead.
+    func testFullInjectionPayload_throughTitle_staysInsideTheStringLiteral() throws {
+        let payload = #"x" & (do shell script "rm -rf ~") & ""#
+        let escaped = AppleScriptString.escaped(payload)
+        XCTAssertFalse(containsUnescapedQuote(escaped),
+                       "no bare quote from the escaped title may break out of the literal")
+
+        let src = try XCTUnwrap(TerminalFocusScript.build(strategy: .appleTerminal, title: payload, titleTag: ""))
+        XCTAssertTrue(src.contains(#"contains "\#(escaped)""#),
+                      "the title must be interpolated exactly as the escaped literal")
+        XCTAssertEqual(occurrences(of: "do shell script", in: src), 1)
+    }
+
+    /// Both title and titleTag hostile at once (an attacker-controlled aiTitle AND a corrupted
+    /// marker) — escaping must hold for both interpolation sites simultaneously.
+    func testHostileTitleAndTitleTag_bothEscaped_noBreakout() throws {
+        let titlePayload = #"a" & (do shell script "echo pwned") & "b"#
+        let tagPayload = #"c" & (do shell script "echo pwned2") & "d"#
+        XCTAssertFalse(containsUnescapedQuote(AppleScriptString.escaped(titlePayload)))
+        XCTAssertFalse(containsUnescapedQuote(AppleScriptString.escaped(tagPayload)))
+
+        let src = try XCTUnwrap(TerminalFocusScript.build(strategy: .iterm, title: titlePayload, titleTag: tagPayload))
+        XCTAssertEqual(occurrences(of: "do shell script", in: src), 2, "both hostile payloads must stay inert, quoted literals")
     }
 
     func testLegitimateUnicodeMarker_survivesUnchanged() {

@@ -25,8 +25,8 @@ final class TerminalFocuserTests: XCTestCase {
         )
     }
 
-    private func session(host: String, tag: String) -> Session {
-        Session(id: "s", terminalHost: host, titleTag: tag)
+    private func session(host: String, tag: String, title: String = "") -> Session {
+        Session(id: "s", terminalHost: host, titleTag: tag, displayName: title)
     }
 
     // MARK: - Tab-capable
@@ -65,7 +65,7 @@ final class TerminalFocuserTests: XCTestCase {
         let result = makeFocuser(spy).focus(session: session(host: "Apple_Terminal", tag: "x"))
         XCTAssertEqual(result, .appActivatedOnly)
         let script = spy.lastScript ?? ""
-        XCTAssertFalse(script.contains("set theMarker"), "no marker-matching for an unsafe short marker")
+        XCTAssertFalse(script.contains("contains"), "no marker-matching for an unsafe short marker")
         XCTAssertTrue(script.contains("activate"))
     }
 
@@ -73,7 +73,48 @@ final class TerminalFocuserTests: XCTestCase {
         let spy = Spy(); spy.scriptOutcome = .success("app")
         let result = makeFocuser(spy).focus(session: session(host: "iTerm.app", tag: ""))
         XCTAssertEqual(result, .appActivatedOnly)
-        XCTAssertFalse(spy.lastScript?.contains("set theMarker") ?? true)
+        XCTAssertFalse(spy.lastScript?.contains("contains") ?? true)
+    }
+
+    // MARK: - Title (aiTitle) as the PRIMARY match key (root-cause fix)
+
+    /// Root cause of "clicking a row does nothing": Terminal.app's `custom title` is Claude's
+    /// task-summary title (aiTitle) with a leading status glyph, e.g.
+    /// `"⠐ Adapt Windows app to macOS with menu bar design"` — it never contains the `titleTag`
+    /// marker. The focus script must match on the plain aiTitle with a CONTAINS clause, which
+    /// tolerates that leading glyph/whitespace since it only needs to appear AS A SUBSTRING of the
+    /// real tab title, not equal it.
+    func testTitleMatch_usesDisplayNameAsPrimaryMarker_toleratingLeadingGlyph() {
+        let spy = Spy(); spy.scriptOutcome = .success("tab")
+        let aiTitle = "Adapt Windows app to macOS with menu bar design"
+        let result = makeFocuser(spy).focus(session: session(host: "Apple_Terminal", tag: "", title: aiTitle))
+        XCTAssertEqual(result, .focusedTab)
+        let script = spy.lastScript ?? ""
+        XCTAssertTrue(script.contains(#"contains "\#(aiTitle)""#),
+                       "the plain aiTitle (no glyph) must be the CONTAINS marker — a real tab title "
+                       + "like '⠐ \(aiTitle)' contains it as a substring")
+    }
+
+    /// When the transcript title hasn't resolved (empty `displayName`), the focuser must still be
+    /// able to match via the secondary `titleTag` marker — never silently give up on the title path
+    /// entirely.
+    func testEmptyDisplayName_fallsBackToTitleTagMarker() {
+        let spy = Spy(); spy.scriptOutcome = .success("tab")
+        let result = makeFocuser(spy).focus(session: session(host: "Apple_Terminal", tag: "MyAgents ⟦cc:1fd1ff1c⟧", title: ""))
+        XCTAssertEqual(result, .focusedTab)
+        XCTAssertTrue(spy.lastScript?.contains("1fd1ff1c") ?? false)
+    }
+
+    /// Both keys present: the built condition ORs them together, so a terminal that stamped only
+    /// the marker (not the aiTitle) still matches.
+    func testBothTitleAndTitleTagPresent_conditionMatchesEither() {
+        let spy = Spy(); spy.scriptOutcome = .success("tab")
+        let result = makeFocuser(spy).focus(session: session(host: "iTerm.app", tag: "MyAgents ⟦cc:1fd1ff1c⟧", title: "Adapt Windows app"))
+        XCTAssertEqual(result, .focusedTab)
+        let script = spy.lastScript ?? ""
+        XCTAssertTrue(script.contains(#"contains "Adapt Windows app""#))
+        XCTAssertTrue(script.contains("1fd1ff1c"))
+        XCTAssertTrue(script.contains(" or "), "both markers must be OR-ed in a single condition")
     }
 
     // MARK: - Window-only

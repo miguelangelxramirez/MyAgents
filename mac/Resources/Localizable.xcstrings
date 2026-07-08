@@ -247,34 +247,16 @@
         "es" : { "stringUnit" : { "state" : "translated", "value" : "Codex" } }
       }
     },
-    "usage.header" : {
+    "usage.summary.line" : {
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Usage" } },
-        "es" : { "stringUnit" : { "state" : "translated", "value" : "Uso" } }
-      }
-    },
-    "usage.stale" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "· %lld min ago" } },
-        "es" : { "stringUnit" : { "state" : "translated", "value" : "· hace %lld min" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "%@ · 5h %@ · 7d %@" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "%@ · 5h %@ · 7d %@" } }
       }
     },
     "usage.unknown" : {
       "localizations" : {
         "en" : { "stringUnit" : { "state" : "translated", "value" : "—" } },
         "es" : { "stringUnit" : { "state" : "translated", "value" : "—" } }
-      }
-    },
-    "usage.window.5h" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "5 h" } },
-        "es" : { "stringUnit" : { "state" : "translated", "value" : "5 h" } }
-      }
-    },
-    "usage.window.7d" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "7 d" } },
-        "es" : { "stringUnit" : { "state" : "translated", "value" : "7 d" } }
       }
     }
   },

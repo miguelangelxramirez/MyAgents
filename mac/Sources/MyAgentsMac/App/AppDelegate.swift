@@ -57,7 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.action = #selector(togglePopover)
             button.target = self
             glyphController = MenuBarGlyphController(button: button)
-            glyphController?.update(status: MenuBarStatus(kind: .idle, busyProvider: nil), badgePercent: nil)
+            glyphController?.update(status: MenuBarStatus(kind: .idle, busyProvider: nil))
         }
         statusItem = item
     }
@@ -82,7 +82,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Reactive wiring
 
     private func bindStores() {
-        // Sessions → glyph + permission banners.
+        // Sessions → glyph + permission banners. Usage no longer touches the glyph (Fix 4): it
+        // lives only in the popover's top summary line, which observes `usageStore`/`preferences`
+        // directly via SwiftUI — no Combine wiring needed here for it.
         sessionStore.$sessions
             .receive(on: RunLoop.main)
             .sink { [weak self] sessions in
@@ -90,23 +92,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.notifier.handle(sessions: sessions)
             }
             .store(in: &cancellables)
-
-        // Usage + "show usage" preference → the composed % badge (Claude 5h).
-        usageStore.$claude
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in self?.refreshGlyph() }
-            .store(in: &cancellables)
-
-        preferences.$showUsage
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in self?.refreshGlyph() }
-            .store(in: &cancellables)
     }
 
     private func refreshGlyph(sessions: [Session]? = nil) {
         let status = MenuBarStatus.evaluate(sessions ?? sessionStore.sessions)
-        let badge = preferences.showUsage ? usageStore.claude.fiveHourPercent : nil
-        glyphController?.update(status: status, badgePercent: badge)
+        glyphController?.update(status: status)
     }
 
     // MARK: - Actions
@@ -132,10 +122,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let focuser = terminalFocuser
         let terminalHost = session.terminalHost
+        let title = session.displayName
         let titleTag = session.titleTag
         let id = session.id
         Task.detached { [weak self] in
-            let result = focuser.focus(terminalHost: terminalHost, titleTag: titleTag)
+            let result = focuser.focus(terminalHost: terminalHost, title: title, titleTag: titleTag)
             await self?.handleFocusResult(result, sessionID: id)
         }
     }

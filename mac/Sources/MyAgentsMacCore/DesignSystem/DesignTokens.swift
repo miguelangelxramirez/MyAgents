@@ -115,8 +115,9 @@ public enum DesignTokens {
     /// Kept out of `Spacing` because they're not on the 8pt gap grid — they're component sizes.
     public enum Metrics {
         /// Popover content width. Roomy enough for a folder path + state without wrapping, narrow
-        /// enough to feel like a menu, not a window.
-        public static let popoverWidth: CGFloat = 300
+        /// enough to feel like a menu, not a window. Bumped 300 → 340 (live user feedback, Fix 3)
+        /// for more breathing room around the top usage summary line and longer folder paths.
+        public static let popoverWidth: CGFloat = 340
         /// Left provider accent bar.
         public static let accentBarWidth: CGFloat = 3
         public static let accentBarHeight: CGFloat = 34
@@ -126,8 +127,6 @@ public enum DesignTokens {
         public static let dotSize: CGFloat = 7
         /// Menu-bar glyph point size (drawn into the status item image).
         public static let glyphPointSize: CGFloat = 15
-        /// Font size of the composed "% badge" text drawn next to the menu-bar glyph.
-        public static let glyphBadgeFontSize: CGFloat = 9
         /// Max height of the scrolling session list before it scrolls instead of growing.
         public static let popoverMaxListHeight: CGFloat = 320
         /// Fixed columns in a usage row so bars line up across providers.

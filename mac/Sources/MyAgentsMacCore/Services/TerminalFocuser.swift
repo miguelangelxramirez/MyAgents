@@ -34,39 +34,67 @@ public struct TerminalFocuser: Sendable {
 
     // MARK: - Focus
 
-    /// Convenience over `focus(terminalHost:titleTag:)` reading both keys off the session.
+    /// Convenience over `focus(terminalHost:title:titleTag:)` reading the keys off the session.
+    /// `title` is `session.displayName` (the resolved aiTitle) — the PRIMARY match key, because
+    /// empirically (verified on this machine) Terminal.app/iTerm2/Ghostty stamp the tab's
+    /// name/custom-title with Claude's task-summary title (plus a leading status glyph), not the
+    /// `titleTag` marker. `titleTag` stays as a secondary fallback for setups that do embed the
+    /// `⟦cc:…⟧` marker in the title.
     public func focus(session: Session) -> TerminalFocusResult {
-        focus(terminalHost: session.terminalHost, titleTag: session.titleTag)
+        focus(terminalHost: session.terminalHost, title: session.displayName, titleTag: session.titleTag)
     }
 
     /// Brings the session's terminal forward. Never throws, never crashes: a missing app or a
     /// permission-denied script both come back as `.failed(reason:)`, logged.
-    public func focus(terminalHost: String, titleTag: String) -> TerminalFocusResult {
+    ///
+    /// - Parameters:
+    ///   - title: the session's resolved display title (aiTitle) — matched against the terminal's
+    ///     tab title with a CONTAINS check, tolerating a leading glyph/whitespace Claude Code
+    ///     prepends (e.g. tab title `"⠐ Adapt Windows app to macOS"` contains title `"Adapt Windows
+    ///     app to macOS"`).
+    ///   - titleTag: the `⟦cc:…⟧` focus marker — a secondary fallback CONTAINS match for setups
+    ///     that put the marker literally in the title instead.
+    public func focus(terminalHost: String, title: String, titleTag: String) -> TerminalFocusResult {
+        let titleSource = Self.describeTitleSource(title: title, titleTag: titleTag)
+        logger.info("Focus start: host='\(terminalHost, privacy: .public)' using \(titleSource, privacy: .public)")
+
+        let result: TerminalFocusResult
         switch TerminalFocusPlanner.strategy(forTerminalHost: terminalHost) {
         case .appleTerminal, .iterm, .ghostty:
-            return focusScriptable(TerminalFocusPlanner.strategy(forTerminalHost: terminalHost), titleTag: titleTag)
+            result = focusScriptable(TerminalFocusPlanner.strategy(forTerminalHost: terminalHost), title: title, titleTag: titleTag)
         case .windowOnly(let target):
             if activate(target) {
-                logger.debug("Activated window-only terminal \(target.displayName, privacy: .public)")
-                return .focusedWindow
+                result = .focusedWindow
+            } else {
+                result = .failed(reason: .appNotRunning)
             }
-            logger.info("Window-only terminal \(target.displayName, privacy: .public) is not running")
-            return .failed(reason: .appNotRunning)
         case .unsupported:
-            logger.info("No focus strategy for terminalHost '\(terminalHost, privacy: .public)'")
-            return .failed(reason: .unsupportedTerminal)
+            result = .failed(reason: .unsupportedTerminal)
         }
+
+        logger.info("Focus result: host='\(terminalHost, privacy: .public)' → \(String(describing: result), privacy: .public)")
+        return result
     }
 
-    private func focusScriptable(_ strategy: TerminalFocusStrategy, titleTag: String) -> TerminalFocusResult {
+    /// Which key (if any) will drive the tab match — logged at `.info` (not the title's CONTENT,
+    /// which may be a user's project name/prompt) so a diagnostic session shows "what happened"
+    /// without leaking the title text itself.
+    private static func describeTitleSource(title: String, titleTag: String) -> String {
+        if title.trimmingCharacters(in: .whitespacesAndNewlines).count >= 3 { return "title(aiTitle)" }
+        if titleTag.trimmingCharacters(in: .whitespacesAndNewlines).count >= 3 { return "titleTag(marker)" }
+        return "none"
+    }
+
+    private func focusScriptable(_ strategy: TerminalFocusStrategy, title: String, titleTag: String) -> TerminalFocusResult {
         guard let appName = strategy.scriptableAppName else { return .failed(reason: .unsupportedTerminal) }
-        let marker = titleTag.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedTag = titleTag.trimmingCharacters(in: .whitespacesAndNewlines)
 
         // A marker shorter than 3 chars would match almost any tab title (same guard the Windows
         // reference uses) — degrade to "just bring the app forward" rather than land on the wrong
         // tab.
         let source: String
-        if marker.count >= 3, let matchScript = TerminalFocusScript.build(strategy: strategy, titleTag: marker) {
+        if let matchScript = TerminalFocusScript.build(strategy: strategy, title: trimmedTitle, titleTag: trimmedTag) {
             source = matchScript
         } else {
             source = TerminalFocusScript.activateOnly(appName: appName)
@@ -266,17 +294,31 @@ public enum AppleScriptString {
 // MARK: - AppleScript source builder (pure, tested)
 
 /// Builds the AppleScript SOURCE for the three tab-capable terminals. Each script walks the
-/// terminal's window/tab hierarchy, matches the tab whose title CONTAINS the (escaped) marker,
-/// selects that tab and raises its window, then `activate`s the app — returning `"tab"` on a match
-/// or `"app"` when only the app was brought forward. Verified against each terminal's scripting
-/// docs (see return notes for URLs).
+/// terminal's window/tab hierarchy, matches the tab whose title CONTAINS the (escaped) title
+/// and/or titleTag marker — case-insensitively (AppleScript's `contains` is case-insensitive by
+/// DEFAULT; wrapped in an explicit `ignoring case` block anyway for self-documentation, per the
+/// AppleScript Language Guide "Considering/Ignoring" — verified 2026-07-09,
+/// developer.apple.com/library/archive/documentation/AppleScript/Conceptual/AppleScriptLangGuide/reference/ASLR_control_statements.html)
+/// — selects that tab and raises its window, then `activate`s the app — returning `"tab"` on a
+/// match or `"app"` when only the app was brought forward. Verified against each terminal's
+/// scripting docs (see return notes for URLs).
+///
+/// `title` (the session's aiTitle) is the PRIMARY key: empirically, Terminal.app's `custom title`
+/// (and iTerm2/Ghostty's session/terminal `name`) is Claude's task-summary title with a leading
+/// status glyph — e.g. `"⠐ Adapt Windows app to macOS with menu bar design"` — which CONTAINS the
+/// aiTitle but never the `⟦cc:…⟧` `titleTag` marker. `titleTag` is a secondary fallback CONTAINS
+/// clause (`OR`) for setups that do embed the marker in the title.
 public enum TerminalFocusScript {
-    public static func build(strategy: TerminalFocusStrategy, titleTag: String) -> String? {
-        let marker = AppleScriptString.escaped(titleTag)
+    /// `nil` when neither `title` nor `titleTag` is long enough (≥3 chars) to be a safe marker —
+    /// the caller then falls back to `activateOnly`.
+    public static func build(strategy: TerminalFocusStrategy, title: String, titleTag: String) -> String? {
+        let titleMarker = title.count >= 3 ? AppleScriptString.escaped(title) : nil
+        let tagMarker = titleTag.count >= 3 ? AppleScriptString.escaped(titleTag) : nil
+        guard titleMarker != nil || tagMarker != nil else { return nil }
         switch strategy {
-        case .appleTerminal: return appleTerminal(marker: marker)
-        case .iterm: return iterm(marker: marker)
-        case .ghostty: return ghostty(marker: marker)
+        case .appleTerminal: return appleTerminal(titleMarker: titleMarker, tagMarker: tagMarker)
+        case .iterm: return iterm(titleMarker: titleMarker, tagMarker: tagMarker)
+        case .ghostty: return ghostty(titleMarker: titleMarker, tagMarker: tagMarker)
         case .windowOnly, .unsupported: return nil
         }
     }
@@ -291,27 +333,39 @@ public enum TerminalFocusScript {
         """
     }
 
-    private static func appleTerminal(marker: String) -> String {
-        """
+    /// Builds the `(variable contains "…") or (variable contains "…")` condition from whichever
+    /// marker(s) are available. At least one of `titleMarker`/`tagMarker` is guaranteed non-nil by
+    /// `build`'s guard.
+    private static func matchCondition(variable: String, titleMarker: String?, tagMarker: String?) -> String {
+        var clauses: [String] = []
+        if let titleMarker { clauses.append("\(variable) contains \"\(titleMarker)\"") }
+        if let tagMarker { clauses.append("\(variable) contains \"\(tagMarker)\"") }
+        return "(" + clauses.joined(separator: " or ") + ")"
+    }
+
+    private static func appleTerminal(titleMarker: String?, tagMarker: String?) -> String {
+        let condition = matchCondition(variable: "tt", titleMarker: titleMarker, tagMarker: tagMarker)
+        return """
         tell application "Terminal"
-        \tset theMarker to "\(marker)"
         \tset matched to false
-        \trepeat with w in windows
-        \t\trepeat with t in tabs of w
-        \t\t\tset tt to ""
-        \t\t\ttry
-        \t\t\t\tset tt to custom title of t
-        \t\t\tend try
-        \t\t\tif tt is not missing value and tt contains theMarker then
-        \t\t\t\tset selected tab of w to t
-        \t\t\t\tset index of w to 1
-        \t\t\t\tset frontmost of w to true
-        \t\t\t\tset matched to true
-        \t\t\t\texit repeat
-        \t\t\tend if
+        \tignoring case
+        \t\trepeat with w in windows
+        \t\t\trepeat with t in tabs of w
+        \t\t\t\tset tt to ""
+        \t\t\t\ttry
+        \t\t\t\t\tset tt to custom title of t
+        \t\t\t\tend try
+        \t\t\t\tif tt is not missing value and \(condition) then
+        \t\t\t\t\tset selected tab of w to t
+        \t\t\t\t\tset index of w to 1
+        \t\t\t\t\tset frontmost of w to true
+        \t\t\t\t\tset matched to true
+        \t\t\t\t\texit repeat
+        \t\t\t\tend if
+        \t\t\tend repeat
+        \t\t\tif matched then exit repeat
         \t\tend repeat
-        \t\tif matched then exit repeat
-        \tend repeat
+        \tend ignoring
         \tactivate
         \tif matched then
         \t\treturn "tab"
@@ -322,29 +376,31 @@ public enum TerminalFocusScript {
         """
     }
 
-    private static func iterm(marker: String) -> String {
-        """
+    private static func iterm(titleMarker: String?, tagMarker: String?) -> String {
+        let condition = matchCondition(variable: "sn", titleMarker: titleMarker, tagMarker: tagMarker)
+        return """
         tell application "iTerm2"
-        \tset theMarker to "\(marker)"
         \tset matched to false
-        \trepeat with w in windows
-        \t\trepeat with t in tabs of w
-        \t\t\trepeat with s in sessions of t
-        \t\t\t\tset sn to ""
-        \t\t\t\ttry
-        \t\t\t\t\tset sn to name of s
-        \t\t\t\tend try
-        \t\t\t\tif sn contains theMarker then
-        \t\t\t\t\ttell t to select
-        \t\t\t\t\ttell w to select
-        \t\t\t\t\tset matched to true
-        \t\t\t\t\texit repeat
-        \t\t\t\tend if
+        \tignoring case
+        \t\trepeat with w in windows
+        \t\t\trepeat with t in tabs of w
+        \t\t\t\trepeat with s in sessions of t
+        \t\t\t\t\tset sn to ""
+        \t\t\t\t\ttry
+        \t\t\t\t\t\tset sn to name of s
+        \t\t\t\t\tend try
+        \t\t\t\t\tif \(condition) then
+        \t\t\t\t\t\ttell t to select
+        \t\t\t\t\t\ttell w to select
+        \t\t\t\t\t\tset matched to true
+        \t\t\t\t\t\texit repeat
+        \t\t\t\t\tend if
+        \t\t\t\tend repeat
+        \t\t\t\tif matched then exit repeat
         \t\t\tend repeat
         \t\t\tif matched then exit repeat
         \t\tend repeat
-        \t\tif matched then exit repeat
-        \tend repeat
+        \tend ignoring
         \tactivate
         \tif matched then
         \t\treturn "tab"
@@ -355,29 +411,31 @@ public enum TerminalFocusScript {
         """
     }
 
-    private static func ghostty(marker: String) -> String {
-        """
+    private static func ghostty(titleMarker: String?, tagMarker: String?) -> String {
+        let condition = matchCondition(variable: "tn", titleMarker: titleMarker, tagMarker: tagMarker)
+        return """
         tell application "Ghostty"
-        \tset theMarker to "\(marker)"
         \tset matched to false
-        \trepeat with w in windows
-        \t\trepeat with t in tabs of w
-        \t\t\trepeat with term in terminals of t
-        \t\t\t\tset tn to ""
-        \t\t\t\ttry
-        \t\t\t\t\tset tn to name of term
-        \t\t\t\tend try
-        \t\t\t\tif tn contains theMarker then
-        \t\t\t\t\tselect t
-        \t\t\t\t\tfocus term
-        \t\t\t\t\tset matched to true
-        \t\t\t\t\texit repeat
-        \t\t\t\tend if
+        \tignoring case
+        \t\trepeat with w in windows
+        \t\t\trepeat with t in tabs of w
+        \t\t\t\trepeat with term in terminals of t
+        \t\t\t\t\tset tn to ""
+        \t\t\t\t\ttry
+        \t\t\t\t\t\tset tn to name of term
+        \t\t\t\t\tend try
+        \t\t\t\t\tif \(condition) then
+        \t\t\t\t\t\tselect t
+        \t\t\t\t\t\tfocus term
+        \t\t\t\t\t\tset matched to true
+        \t\t\t\t\t\texit repeat
+        \t\t\t\t\tend if
+        \t\t\t\tend repeat
+        \t\t\t\tif matched then exit repeat
         \t\t\tend repeat
         \t\t\tif matched then exit repeat
         \t\tend repeat
-        \t\tif matched then exit repeat
-        \tend repeat
+        \tend ignoring
         \tactivate
         \tif matched then
         \t\treturn "tab"
