@@ -134,6 +134,7 @@ This project is **open source** — you can audit exactly what it does.
 - **Codex usage:** read from Codex's own local `app-server` RPC using your already-cached login (no token sent over the network, no undocumented HTTP endpoint).
 - **Stored locally:** only UI preferences (corner, visibility, toggles) in `%APPDATA%\MyAgents\settings.json`.
 - It does **not** send credentials anywhere, has no backend, and collects no telemetry.
+- **Update check (the only outbound call):** at startup, at most **once a day**, it does a single unauthenticated GET to GitHub's public Releases API to see if a newer version exists — no token, no personal data. If one exists it shows a small "update available" link in the header (it **never** downloads or replaces itself; clicking opens the Releases page). Turn it off in **⚙ menu → Check for updates**.
 
 > A separate **local-only** build flag (`USAGE_LOCAL`) keeps the old undocumented OAuth/`wham` endpoints as a
 > fallback — that code is **compiled out of the public release**. See [PUBLISHING.md](PUBLISHING.md).

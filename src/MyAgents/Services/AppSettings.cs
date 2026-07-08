@@ -17,6 +17,8 @@ public sealed class AppSettings
     public bool CodexEnabled { get; set; } = false;   // also wire Codex CLI hooks (experimental)
     public bool UsageEnabled { get; set; } = false;    // opt-in: only read local tokens after the user turns this on
     public bool NotificationsEnabled { get; set; } = true;  // toast + sound when a session needs your permission
+    public bool UpdateCheckEnabled { get; set; } = true;    // opt-out: check GitHub Releases for a newer version (the app's only network call)
+    public long LastUpdateCheckUnix { get; set; } = 0;      // throttle the check to at most once/day
 
     [JsonIgnore]
     private static string Dir =>

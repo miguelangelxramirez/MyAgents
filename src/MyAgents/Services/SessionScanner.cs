@@ -98,9 +98,6 @@ public sealed class SessionScanner
                 var accessible = ToAccessible(s.Transcript, origin);
                 var title = TranscriptTitle.Get(s.SessionId, accessible);
                 if (title.Length > 0) s.Name = title;
-                // Only for "thinking": one cheap stat to tell real streaming from a stalled turn.
-                if (s.State == "thinking" && accessible.Length > 0)
-                    try { s.TranscriptMtimeUnix = new DateTimeOffset(File.GetLastWriteTimeUtc(accessible)).ToUnixTimeSeconds(); } catch { }
                 result.Add(s);
             }
         }

@@ -37,12 +37,15 @@ public sealed class ProcessScanner
         // Union of: comm==claude/codex AND node processes whose cmdline is the CLI
         // (covers Claude/Codex running as `node`). Excludes our own hook scripts and
         // mcp servers. Classify by cmdline. Sent via STDIN (sh -s) — wsl mangles args.
+        // NOTE: also excludes `codex app-server` — that's the programmatic RPC WE spawn to read
+        // Codex usage (never an interactive session); without this it self-counts as a phantom
+        // "publish" row (its cwd is the app's working dir, e.g. ...\win-x64\publish).
         const string sh =
             "PATH=/usr/bin:/bin:$PATH\n" +
             "{ pgrep -x claude; pgrep -x codex; pgrep -x node; } | sort -un | while read p; do\n" +
             "  [ -d /proc/$p ] || continue\n" +
             "  cmd=$(tr '\\0' ' ' < /proc/$p/cmdline 2>/dev/null)\n" +
-            "  case \"$cmd\" in *statusbar*|*update.js*|*lifecycle.js*|*mcp*) continue ;; esac\n" +
+            "  case \"$cmd\" in *statusbar*|*update.js*|*lifecycle.js*|*mcp*|*app-server*) continue ;; esac\n" +
             "  case \"$cmd\" in *codex*) prov=codex ;; *claude*) prov=claude ;; *) continue ;; esac\n" +
             "  echo \"$p|$prov|$(readlink /proc/$p/cwd 2>/dev/null)\"\n" +
             "done\n";
@@ -53,8 +56,11 @@ public sealed class ProcessScanner
             foreach (var a in new[] { "-d", distro, "--", "sh", "-s" }) psi.ArgumentList.Add(a);
             using var p = Process.Start(psi);
             if (p is null) return;
-            p.StandardInput.Write(sh);
-            p.StandardInput.Close();
+            // When WSL's service has crashed (E_UNEXPECTED), wsl.exe starts then dies at once, so writing
+            // the script to its stdin throws a broken-pipe IOException. Don't let that skip the stderr
+            // read below — otherwise we never set Wsl.ExecBroken and the UI shows a misleading count
+            // instead of the "WSL stuck — Restart WSL" hint. Swallow it and go read the error.
+            try { p.StandardInput.Write(sh); p.StandardInput.Close(); } catch { }
             var outp = p.StandardOutput.ReadToEnd();
             var err = p.StandardError.ReadToEnd();
             if (!p.WaitForExit(4000)) { try { p.Kill(); } catch { } Log.Write($"proc:{distro} timeout"); return; }

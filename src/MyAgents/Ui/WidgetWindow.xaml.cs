@@ -25,6 +25,12 @@ public partial class WidgetWindow : Window, INotifyPropertyChanged
     private bool _isEmpty = true;
     public bool IsEmpty { get => _isEmpty; private set => Set(ref _isEmpty, value); }
 
+    private bool _updateAvailable;
+    public bool UpdateAvailable { get => _updateAvailable; private set => Set(ref _updateAvailable, value); }
+    private string _updateText = "";
+    public string UpdateText { get => _updateText; private set => Set(ref _updateText, value); }
+    private string _updateUrl = "";
+
     public event Action? CloseRequested;
     public event Action? SettingsRequested;
 
@@ -82,6 +88,21 @@ public partial class WidgetWindow : Window, INotifyPropertyChanged
 
     public void SetUsage(UsageInfo u) => Usage.Update(u);
     public void SetCodexUsage(UsageInfo u) => CodexUsage.Update(u);
+
+    /// <summary>Show a small, discreet "update available" link in the header. Clicking it opens the
+    /// Releases page in the browser — the app never downloads or replaces itself.</summary>
+    public void SetUpdateAvailable(string version, string url)
+    {
+        _updateUrl = url;
+        UpdateText = $"update {version} ↗";
+        UpdateAvailable = true;
+    }
+
+    private void Update_Click(object sender, MouseButtonEventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(_updateUrl)) return;
+        try { Process.Start(new ProcessStartInfo(_updateUrl) { UseShellExecute = true }); } catch { }
+    }
 
     // ---- Interaction ----
 
@@ -149,7 +170,12 @@ public partial class WidgetWindow : Window, INotifyPropertyChanged
 
     public void ShowWidget()
     {
+        // Force a clean visible state: undo any stray minimize, show if hidden, re-pin on-screen
+        // (handles a monitor/resolution change that left it off-screen) and re-assert topmost+focus
+        // (Topmost can silently drop after sleep/resume). Called on tray click and the "show" poke.
+        if (WindowState != WindowState.Normal) WindowState = WindowState.Normal;
         if (!IsVisible) Show();
+        Visibility = Visibility.Visible;
         ApplyAnchor();
         Topmost = false; Topmost = true;
         Activate();

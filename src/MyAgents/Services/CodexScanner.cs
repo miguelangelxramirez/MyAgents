@@ -21,9 +21,11 @@ public sealed class CodexScanner
     // while instead of dropping them the moment they go quiet. Closed sessions also
     // linger up to this long as "idle" — the price of having no end signal.
     private const int ShowSeconds = 1800; // keep listing for 30 min after last activity
-    private const int BusySeconds = 30;   // "working" if written to in the last 30 s (less flip-flop)
+    private const int BusySeconds = 30;   // FALLBACK only (no lifecycle marker in tail): "working" if written to in the last 30 s
+    private const int DeepScanIntervalMs = 20_000; // how often to do the recursive sweep (see CandidateFiles)
 
     private List<(string Dir, string Origin)> _roots = new();
+    private long _lastDeepScanMs;   // 0 → first Scan() does a deep sweep
 
     public CodexScanner() => RefreshRoots();
 
@@ -87,37 +89,35 @@ public sealed class CodexScanner
         var result = new List<SessionState>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
 
+        // Every poll does a cheap today/yesterday scan; every DeepScanIntervalMs it also does a
+        // recursive sweep (see CandidateFiles) so a RESUMED session — which Codex keeps appending to
+        // under its ORIGINAL start-date folder — is found instead of being stuck as a synthetic "idle".
+        bool deep = Environment.TickCount64 - _lastDeepScanMs >= DeepScanIntervalMs;
+        if (deep) _lastDeepScanMs = Environment.TickCount64;
+
         foreach (var (root, origin) in _roots)
         {
             if (!SafeExists(root)) continue;
-            foreach (var day in new[] { nowLocal, nowLocal.AddDays(-1) })
+            foreach (var f in CandidateFiles(root, nowLocal, deep))
             {
-                var dir = Path.Combine(root, day.ToString("yyyy"), day.ToString("MM"), day.ToString("dd"));
-                string[] files;
-                try { if (!Directory.Exists(dir)) continue; files = Directory.GetFiles(dir, "rollout-*.jsonl"); }
+                long ageSec;
+                try { ageSec = (long)(DateTime.Now - new FileInfo(f).LastWriteTime).TotalSeconds; }
                 catch { continue; }
+                if (ageSec > ShowSeconds) continue;
 
-                foreach (var f in files)
+                SessionState? s = null;
+                try { s = Parse(f, origin, now, ageSec); } catch { }
+                if (s is not null && !string.IsNullOrEmpty(s.SessionId))
                 {
-                    long ageSec;
-                    try { ageSec = (long)(DateTime.Now - new FileInfo(f).LastWriteTime).TotalSeconds; }
-                    catch { continue; }
-                    if (ageSec > ShowSeconds) continue;
-
-                    SessionState? s = null;
-                    try { s = Parse(f, origin, now, ageSec); } catch { }
-                    if (s is not null && !string.IsNullOrEmpty(s.SessionId))
+                    if (!seen.Add(s.SessionId)) continue;
+                    _cache[s.SessionId] = (s, now);
+                    if (!string.IsNullOrEmpty(s.Name))
                     {
-                        if (!seen.Add(s.SessionId)) continue;
-                        _cache[s.SessionId] = (s, now);
-                        if (!string.IsNullOrEmpty(s.Name))
-                        {
-                            var k = NormCwd(s.Cwd);
-                            _namesByCwd[k] = s.Name;
-                            (_cwdIds.TryGetValue(k, out var set) ? set : (_cwdIds[k] = new(StringComparer.Ordinal))).Add(s.SessionId);
-                        }
-                        result.Add(s);
+                        var k = NormCwd(s.Cwd);
+                        _namesByCwd[k] = s.Name;
+                        (_cwdIds.TryGetValue(k, out var set) ? set : (_cwdIds[k] = new(StringComparer.Ordinal))).Add(s.SessionId);
                     }
+                    result.Add(s);
                 }
             }
         }
@@ -139,6 +139,28 @@ public sealed class CodexScanner
         return result;
     }
 
+    /// <summary>Rollout files to consider for one root. Fast path (every poll): only today's and
+    /// yesterday's date folders — cheap. Deep path (throttled): a recursive sweep of ALL date folders,
+    /// so a resumed session that Codex keeps writing to under an old start-date folder is still seen.
+    /// Everything is filtered by mtime (ShowSeconds) back in Scan(), so the recursive set is bounded
+    /// in what actually gets parsed.</summary>
+    private static IEnumerable<string> CandidateFiles(string root, DateTime nowLocal, bool deep)
+    {
+        if (deep)
+        {
+            try { return Directory.GetFiles(root, "rollout-*.jsonl", SearchOption.AllDirectories); }
+            catch { return Array.Empty<string>(); }
+        }
+        var files = new List<string>();
+        foreach (var day in new[] { nowLocal, nowLocal.AddDays(-1) })
+        {
+            var dir = Path.Combine(root, day.ToString("yyyy"), day.ToString("MM"), day.ToString("dd"));
+            try { if (Directory.Exists(dir)) files.AddRange(Directory.GetFiles(dir, "rollout-*.jsonl")); }
+            catch { }
+        }
+        return files;
+    }
+
     private static SessionState? Parse(string file, string origin, long now, long ageSec)
     {
         string? first = FirstLine(file);
@@ -158,7 +180,7 @@ public sealed class CodexScanner
         catch { return null; }
         if (id.Length == 0) return null;
 
-        var (state, label) = InferState(file, ageSec);
+        var (state, label, startedAt) = InferState(file, ageSec);
         var project = string.IsNullOrEmpty(cwd) ? "" : Path.GetFileName(cwd.Replace('\\', '/').TrimEnd('/'));
         return new SessionState
         {
@@ -174,7 +196,9 @@ public sealed class CodexScanner
             Origin = origin,
             NowUnix = now,
             Ts = now - ageSec,
-            StartedAt = state is "thinking" or "tool" ? now - Math.Min(ageSec, BusySeconds) : 0,
+            // Real turn-start time, parsed from the current turn's task_started event (0 if unknown),
+            // so "Working · Xs" is accurate — not a bogus file-mtime figure capped at 30 s.
+            StartedAt = startedAt,
         };
     }
 
@@ -218,16 +242,54 @@ public sealed class CodexScanner
         static string Trim(string? s) => (s ?? "").Length > 90 ? s![..90] : (s ?? "");
     }
 
-    private static (string state, string label) InferState(string file, long ageSec)
+    private static (string state, string label, long startedAt) InferState(string file, long ageSec)
     {
-        // Best-effort: scan the tail for an approval request (permission) or activity.
-        var tail = Tail(file, 4096);
-        bool approval = tail.Contains("approval", StringComparison.OrdinalIgnoreCase)
-                     && tail.Contains("request", StringComparison.OrdinalIgnoreCase)
-                     && ageSec < 60;
-        if (approval) return ("permission", "Awaiting your approval");
-        if (ageSec <= BusySeconds) return ("tool", "Working");
-        return ("idle", "");
+        // Derive state from the last TURN-BOUNDARY event Codex logs to the rollout, NOT from file
+        // recency. Codex writes explicit lifecycle markers:
+        //   task_started       → a turn began              (working)
+        //   task_complete      → the turn finished normally (idle)
+        //   turn_aborted       → you interrupted it         (idle)  ← recency alone shows a fake "Working"
+        //   thread_rolled_back → conversation rewound       (idle)
+        // plus exec/patch approval requests (permission). Walking the tail newest→oldest, the first
+        // boundary we hit IS the current state — so a cancelled or finished turn drops to idle at
+        // once instead of lingering "Working" for BusySeconds (and then possibly freezing in the
+        // cache if a WSL/UNC read blips during that window).
+        var tail = Tail(file, 16384);
+        var lines = tail.Split('\n');
+        for (int i = lines.Length - 1; i >= 0; i--)
+        {
+            var ln = lines[i];
+            if (ln.Length == 0) continue;
+            if (ln.Contains("\"task_complete\"", StringComparison.Ordinal)) return ("idle", "", 0);
+            if (ln.Contains("\"turn_aborted\"", StringComparison.Ordinal)) return ("idle", "", 0);
+            if (ln.Contains("\"thread_rolled_back\"", StringComparison.Ordinal)) return ("idle", "", 0);
+            if (ln.Contains("approval", StringComparison.OrdinalIgnoreCase)
+                && ln.Contains("request", StringComparison.OrdinalIgnoreCase))
+                return ("permission", "Awaiting your approval", 0);
+            // Current turn is running → working, with the turn's real start time for the elapsed timer.
+            if (ln.Contains("\"task_started\"", StringComparison.Ordinal)) return ("tool", "Working", ParseTimestampUnix(ln));
+        }
+        // No lifecycle marker found in the tail → fall back to the file-recency heuristic (no start time).
+        return ageSec <= BusySeconds ? ("tool", "Working", 0) : ("idle", "", 0);
+    }
+
+    /// <summary>Parse the leading <c>"timestamp":"2026-07-02T16:08:57.967Z"</c> of a rollout line to
+    /// unix seconds (UTC), matching the UTC <c>now</c> the scanner stamps. 0 if absent/unparseable.</summary>
+    private static long ParseTimestampUnix(string line)
+    {
+        try
+        {
+            const string marker = "\"timestamp\":\"";
+            int i = line.IndexOf(marker, StringComparison.Ordinal);
+            if (i < 0) return 0;
+            i += marker.Length;
+            int j = line.IndexOf('"', i);
+            if (j <= i) return 0;
+            return DateTimeOffset.TryParse(line.AsSpan(i, j - i), System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal, out var dto)
+                ? dto.ToUnixTimeSeconds() : 0;
+        }
+        catch { return 0; }
     }
 
     private static string? FirstLine(string file)

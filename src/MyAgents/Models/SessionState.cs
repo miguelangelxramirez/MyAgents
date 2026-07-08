@@ -35,10 +35,6 @@ public sealed class SessionState
     /// <summary>Unix seconds (UTC) when this file was last scanned.</summary>
     [JsonIgnore] public long NowUnix { get; set; }
 
-    /// <summary>Transcript file mtime (unix s). Advances while Claude streams; frozen when
-    /// idle/interrupted — a finer "is it actually working" signal than the hook timestamp.</summary>
-    [JsonIgnore] public long TranscriptMtimeUnix { get; set; }
-
     /// <summary>The reliable substring to match in a window title (avoids the ⟦ ⟧ brackets).</summary>
     [JsonIgnore]
     public string FocusMarker

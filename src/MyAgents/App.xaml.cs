@@ -29,6 +29,7 @@ public partial class App : System.Windows.Application
     private Forms.NotifyIcon _tray = null!;
     private Forms.ContextMenuStrip _menu = null!;
     private WidgetWindow _widget = null!;
+    private bool _widgetClosed;   // set when the widget window is torn down → EnsureWidget() rebuilds it
     private string _iconState = "idle";
     private string _iconVisualKey = "";
     private int _iconPct = -1;                         // 5h usage % drawn on the tray icon (-1 = none)
@@ -39,6 +40,7 @@ public partial class App : System.Windows.Application
     private long _lastProcMs;       // last scan ATTEMPT (throttle)
     private long _lastProcOkMs;     // last SUCCESSFUL scan (freshness for liveness)
     private const long LivenessFreshMs = 20_000;  // snapshot older than this → can't verify openness
+    private const int StaleBridgeSeconds = 1800;  // when process scan is unavailable, only trust hook sessions written within 30 min — a stale pid from a pre-reboot file is NOT proof of life
     private readonly ProcessScanner _proc = new();
     private List<ProcessScanner.Proc>? _liveProcs;
     private List<SessionState> _lastSessions = new();
@@ -48,6 +50,20 @@ public partial class App : System.Windows.Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+
+        // Launch stamp — FIRST thing, before the single-instance check, so EVERY start is recorded
+        // (even an instance that immediately exits because another is already running). Lets us prove
+        // from %APPDATA%\MyAgents\launch-log.txt whether Windows autostart actually fires at boot vs a
+        // manual open — no guessing from a dateless perf log. Diagnostic; cheap; never fatal.
+        try
+        {
+            var dir = System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MyAgents");
+            System.IO.Directory.CreateDirectory(dir);
+            System.IO.File.AppendAllText(System.IO.Path.Combine(dir, "launch-log.txt"),
+                $"{DateTime.Now:yyyy-MM-dd HH:mm:ss}  launch  pid={Environment.ProcessId}  exe={Environment.ProcessPath}\n");
+        }
+        catch { }
 
         // ROOT robustness: an unhandled exception must NEVER close the app. If it did, the tray
         // icon vanishes and the app is hard to relaunch. Swallow UI-thread exceptions (keep the
@@ -80,13 +96,12 @@ public partial class App : System.Windows.Application
             while (true)
             {
                 try { showEvent.WaitOne(); } catch { break; }
-                try { Dispatcher.Invoke(() => { SetWidgetVisible(true); _widget.Activate(); }); } catch { }
+                try { Dispatcher.Invoke(() => { SetWidgetVisible(true); try { _widget.Activate(); } catch { } }); } catch { }
             }
         })
         { IsBackground = true }.Start();
 
-        _widget = new WidgetWindow(_settings);
-        _widget.CloseRequested += () => SetWidgetVisible(false);
+        CreateWidget();   // build the widget + wire its events (also rebuilt on demand if ever torn down)
 
         // The app wires up its own Claude hooks (Windows + every WSL distro) — the
         // user never runs an install script. Codex is read straight from its rollout
@@ -104,21 +119,6 @@ public partial class App : System.Windows.Application
         StartupManager.MigrateLegacyName();   // clean up any pre-rename "ClaudeCodeApp" autostart entry
         ShortcutManager.EnsureStartMenuShortcut();   // so the user can reopen it from the Start menu after closing
         BuildTray();
-        _widget.SettingsRequested += () =>
-        {
-            // Open the menu into the empty quadrant (away from the corner the widget sits
-            // in) so it never overlaps the app — e.g. bottom-right widget → menu grows up-left.
-            var c = _settings.Corner ?? "bottom-right";
-            var dir = (c.Contains("bottom"), c.Contains("right")) switch
-            {
-                (true, true) => Forms.ToolStripDropDownDirection.AboveLeft,
-                (true, false) => Forms.ToolStripDropDownDirection.AboveRight,
-                (false, true) => Forms.ToolStripDropDownDirection.BelowLeft,
-                _ => Forms.ToolStripDropDownDirection.BelowRight,
-            };
-            if (_menu.Visible) { _menu.Close(); return; }   // 2nd click on the gear closes it
-            _menu.Show(Forms.Cursor.Position, dir);
-        };
 
         _lastRootsRefreshMs = Environment.TickCount64;
         _poll.Interval = TimeSpan.FromMilliseconds(PollVisibleMs);
@@ -133,6 +133,22 @@ public partial class App : System.Windows.Application
         _ = RefreshUsageAsync();
 
         if (_settings.WidgetVisible) _widget.ShowWidget();
+
+        _ = CheckForUpdatesAsync();   // passive, opt-out, once/day — shows a small notice if a newer release exists
+    }
+
+    /// <summary>Best-effort background update check. Never throws, never blocks the UI; on a newer
+    /// release it shows a small "update available" link in the widget header (the app never
+    /// self-updates — clicking opens the Releases page).</summary>
+    private async Task CheckForUpdatesAsync()
+    {
+        try
+        {
+            var r = await UpdateCheckService.CheckAsync(_settings);
+            if (r is { } res)
+                Dispatcher.Invoke(() => _widget.SetUpdateAvailable(res.Version, res.Url));
+        }
+        catch { /* non-fatal */ }
     }
 
     private void BuildTray()
@@ -186,6 +202,16 @@ public partial class App : System.Windows.Application
         var startup = new Forms.ToolStripMenuItem("Start with Windows") { Checked = StartupManager.IsEnabled() };
         startup.Click += (_, _) => { StartupManager.SetEnabled(!StartupManager.IsEnabled()); startup.Checked = StartupManager.IsEnabled(); };
         menu.Items.Add(startup);
+
+        var updates = new Forms.ToolStripMenuItem("Check for updates (once a day)") { Checked = _settings.UpdateCheckEnabled };
+        updates.Click += (_, _) =>
+        {
+            _settings.UpdateCheckEnabled = !_settings.UpdateCheckEnabled;
+            _settings.Save();
+            updates.Checked = _settings.UpdateCheckEnabled;
+            if (_settings.UpdateCheckEnabled) { _settings.LastUpdateCheckUnix = 0; _ = CheckForUpdatesAsync(); }
+        };
+        menu.Items.Add(updates);
 
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add("Repair hooks", null, (_, _) =>
@@ -340,9 +366,16 @@ public partial class App : System.Windows.Application
         bool fresh = _liveProcs is { Count: > 0 } && Environment.TickCount64 - _lastProcOkMs < LivenessFreshMs;
         if (!fresh)
         {
-            var survivors = sessions.Where(s => s.Pid > 0).ToList();
+            // Process scan unavailable (right after boot before WSL is ready, or a WSL exec blip). We
+            // can't verify openness, so bridge with hook sessions — but ONLY recently-written ones.
+            // A stored pid is NOT proof of life across a reboot: stale hook files keep their last pid
+            // AND their last state (some "thinking"/"tool"), so trusting every pid>0 resurrects dead
+            // sessions as phantoms ("9 open · 2 working" on a fresh boot). Requiring a recent hook
+            // write drops day-old ghosts while preserving a genuinely active session during a brief
+            // blip (it reappears via liveness the moment a scan succeeds anyway).
+            var survivors = sessions.Where(s => s.Pid > 0 && !s.IsStale(StaleBridgeSeconds)).ToList();
             Log.Write($"liveness: STALE (proc scan unavailable, {(Environment.TickCount64 - _lastProcOkMs) / 1000}s old) " +
-                      $"in={sessions.Count} kept={survivors.Count} — dropped pid-less rows, skipped discovery");
+                      $"in={sessions.Count} kept={survivors.Count} — kept only recent pid rows, dropped ghosts + pid-less, skipped discovery");
             return survivors;
         }
 
@@ -464,16 +497,64 @@ public partial class App : System.Windows.Application
         }
     }
 
-    private void ToggleWidget() => SetWidgetVisible(!_widget.IsVisible);
+    /// <summary>(Re)create the widget window and wire its events. Called at startup and again by
+    /// EnsureWidget() if the window is ever torn down, so the tray click / "show" poke can ALWAYS
+    /// bring it back — a monitor tool must never end up with no window and no way to reopen it.</summary>
+    private void CreateWidget()
+    {
+        _widget = new WidgetWindow(_settings);
+        _widgetClosed = false;
+        _widget.Closed += (_, _) => _widgetClosed = true;
+        _widget.CloseRequested += () => SetWidgetVisible(false);
+        _widget.SettingsRequested += () =>
+        {
+            // Open the menu into the empty quadrant (away from the corner the widget sits in) so it
+            // never overlaps the app — e.g. bottom-right widget → menu grows up-left.
+            var c = _settings.Corner ?? "bottom-right";
+            var dir = (c.Contains("bottom"), c.Contains("right")) switch
+            {
+                (true, true) => Forms.ToolStripDropDownDirection.AboveLeft,
+                (true, false) => Forms.ToolStripDropDownDirection.AboveRight,
+                (false, true) => Forms.ToolStripDropDownDirection.BelowLeft,
+                _ => Forms.ToolStripDropDownDirection.BelowRight,
+            };
+            if (_menu?.Visible == true) { _menu.Close(); return; }   // 2nd click on the gear closes it
+            _menu?.Show(Forms.Cursor.Position, dir);
+        };
+    }
+
+    private void EnsureWidget()
+    {
+        if (_widget is null || _widgetClosed) CreateWidget();
+    }
+
+    private void ToggleWidget()
+    {
+        // Hide only when the widget is genuinely up on screen; in EVERY other state (hidden, stuck
+        // after resume, off-screen, or torn down) rebuild if needed and force it back to the front.
+        bool up;
+        try { up = !_widgetClosed && _widget is { IsVisible: true }; }
+        catch { up = false; }
+        SetWidgetVisible(!up);
+    }
 
     private void SetWidgetVisible(bool visible)
     {
         if (visible)
         {
-            _widget.ShowWidget();
+            EnsureWidget();
+            try { _widget.ShowWidget(); }
+            catch (Exception ex)
+            {
+                // The window was torn down (closed/disposed after resume, DPI change, etc.) —
+                // rebuild a fresh one and show that. The click NEVER silently does nothing.
+                Log.Write("show: rebuilding widget after " + ex.Message);
+                CreateWidget();
+                try { _widget.ShowWidget(); } catch (Exception ex2) { Log.Write("show failed: " + ex2.Message); }
+            }
             _ = PollAsync();
         }
-        else _widget.Hide();
+        else { try { _widget.Hide(); } catch { } }
 
         _settings.WidgetVisible = visible;
         _settings.Save();

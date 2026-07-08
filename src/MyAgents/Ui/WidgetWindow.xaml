@@ -249,6 +249,7 @@
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
                     <!-- Settings gear sits on the side AWAY from the screen edge so its menu
                          opens into empty space, never over the app. Toggled in ApplyLayout. -->
@@ -257,11 +258,19 @@
                     <TextBlock Grid.Column="1" Text="{Binding HeaderText}" Margin="13,0,0,0"
                                VerticalAlignment="Center" Foreground="{x:Static ui:Palette.TextSecondary}"
                                FontSize="12" FontWeight="SemiBold"/>
-                    <Button Grid.Column="2" x:Name="SettingsBtnRight" Style="{StaticResource IconButton}"
+                    <!-- Passive "update available" link (only shown when a newer release exists).
+                         Clicking opens the Releases page — the app never self-updates. -->
+                    <TextBlock Grid.Column="2" Text="{Binding UpdateText}" VerticalAlignment="Center"
+                               Margin="6,0,4,0" FontSize="10.5" FontWeight="SemiBold" Cursor="Hand"
+                               Foreground="{x:Static ui:Palette.Permission}"
+                               ToolTip="A newer version is available — click to open the Releases page"
+                               MouseLeftButtonUp="Update_Click"
+                               Visibility="{Binding UpdateAvailable, Converter={StaticResource B2V}}"/>
+                    <Button Grid.Column="3" x:Name="SettingsBtnRight" Style="{StaticResource IconButton}"
                             Content="⚙" Click="Settings_Click" ToolTip="Settings"/>
-                    <Button Grid.Column="3" x:Name="CollapseBtn" Style="{StaticResource IconButton}"
+                    <Button Grid.Column="4" x:Name="CollapseBtn" Style="{StaticResource IconButton}"
                             Content="▾" Click="Collapse_Click"/>
-                    <Button Grid.Column="4" Style="{StaticResource IconButton}"
+                    <Button Grid.Column="5" Style="{StaticResource IconButton}"
                             Content="✕" Click="Close_Click"/>
                 </Grid>
             </Border>
