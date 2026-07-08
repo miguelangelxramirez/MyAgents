@@ -9,12 +9,18 @@ import Combine
 /// result attention-first (`SessionOrdering`). The scan + process discovery are genuinely blocking
 /// I/O, so the poll loop always hops off the main actor to do that work (`Task.detached`) before
 /// coming back to publish.
+///
+/// Each scanned session's row TITLE is also resolved here (`SessionDisplayName` +
+/// `TranscriptTitle`) before publishing — never in the view. Resolving requires reading the
+/// session's transcript file (`TranscriptTitle`), which is exactly the kind of blocking I/O that
+/// must happen inside the same `Task.detached` hop as the scan, not on the main actor.
 @MainActor
 public final class SessionStore: ObservableObject {
     @Published public private(set) var sessions: [Session] = []
 
     private let scanner: SessionScanner
     private let discoverProcesses: @Sendable () -> [ProcessLiveness.DiscoveredProcess]
+    private let transcriptTitle: TranscriptTitle
     private let pollInterval: TimeInterval
     private var pollTask: Task<Void, Never>?
 
@@ -24,21 +30,26 @@ public final class SessionStore: ObservableObject {
     ///     the menu bar glyph without a noticeable lag.
     ///   - discoverProcesses: injectable so tests can supply canned live processes instead of
     ///     scanning the real system process table.
+    ///   - transcriptTitle: shared `TranscriptTitle` instance so its per-session cache survives
+    ///     across polls instead of re-reading transcripts that already resolved a title.
     public init(
         scanner: SessionScanner = SessionScanner(),
         pollInterval: TimeInterval = 0.5,
-        discoverProcesses: @escaping @Sendable () -> [ProcessLiveness.DiscoveredProcess] = { ProcessLiveness.discoverAgentProcesses() }
+        discoverProcesses: @escaping @Sendable () -> [ProcessLiveness.DiscoveredProcess] = { ProcessLiveness.discoverAgentProcesses() },
+        transcriptTitle: TranscriptTitle = TranscriptTitle()
     ) {
         self.scanner = scanner
         self.pollInterval = pollInterval
         self.discoverProcesses = discoverProcesses
+        self.transcriptTitle = transcriptTitle
     }
 
     /// One-shot synchronous scan+join+order on the calling thread/actor. Useful for previews and
     /// tests; the live app should prefer `start()` so this blocking work never runs on the main
     /// actor repeatedly.
     public func refresh() {
-        apply(scanned: scanner.scanSessions(), processes: discoverProcesses())
+        let scanned = Self.resolvingDisplayNames(scanner.scanSessions(), transcriptTitle: transcriptTitle)
+        apply(scanned: scanned, processes: discoverProcesses())
     }
 
     /// Starts the periodic poll loop off the main thread. A second call while already running is
@@ -63,14 +74,39 @@ public final class SessionStore: ObservableObject {
     private func pollOnce() async {
         let scanner = self.scanner
         let discoverProcesses = self.discoverProcesses
+        let transcriptTitle = self.transcriptTitle
         let (scanned, processes) = await Task.detached {
-            (scanner.scanSessions(), discoverProcesses())
+            let raw = scanner.scanSessions()
+            let resolved = Self.resolvingDisplayNames(raw, transcriptTitle: transcriptTitle)
+            return (resolved, discoverProcesses())
         }.value
         apply(scanned: scanned, processes: processes)
     }
 
+    /// Reads each session's transcript (if any) for its AI-authored title and resolves the final
+    /// row title via `SessionDisplayName.resolve`. Static + only `Sendable` captures so this can
+    /// run inside `Task.detached` without touching the main actor.
+    nonisolated private static func resolvingDisplayNames(_ sessions: [Session], transcriptTitle: TranscriptTitle) -> [Session] {
+        sessions.map { session in
+            var resolved = session
+            let aiTitle = transcriptTitle.title(sessionId: session.id, transcriptPath: session.transcript)
+            resolved.displayName = SessionDisplayName.resolve(aiTitle: aiTitle, name: session.name, folder: session.folder)
+            return resolved
+        }
+    }
+
     private func apply(scanned: [Session], processes: [ProcessLiveness.DiscoveredProcess]) {
         let joined = SessionLivenessJoin.join(sessions: scanned, liveProcesses: processes)
-        sessions = SessionOrdering.attentionFirst(joined)
+        // Discovered rows (a live process with no hook file at all) never went through
+        // `resolvingDisplayNames` above — resolve them here too. No transcript to read for these
+        // (there's no wire data at all), so this is a cheap, I/O-free fallback safe for the main
+        // actor: `displayName` empty is the sentinel for "not resolved yet" (see `Session`).
+        let withNames = joined.map { session -> Session in
+            guard session.displayName.isEmpty else { return session }
+            var resolved = session
+            resolved.displayName = SessionDisplayName.resolve(aiTitle: nil, name: session.name, folder: session.folder)
+            return resolved
+        }
+        sessions = SessionOrdering.attentionFirst(withNames)
     }
 }

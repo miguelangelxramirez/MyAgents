@@ -99,7 +99,11 @@ public struct SessionScanner: Sendable {
             startedAt: wire.startedAt > 0 ? Date(timeIntervalSince1970: TimeInterval(wire.startedAt)) : nil,
             updatedAt: wire.ts > 0 ? Date(timeIntervalSince1970: TimeInterval(wire.ts)) : nil,
             ownerPid: wire.pid > 0 ? Int32(clamping: wire.pid) : nil,
-            pending: false
+            pending: false,
+            transcript: wire.transcript,
+            terminalHost: wire.terminalHost,
+            titleTag: wire.titleTag,
+            host: wire.host
         )
     }
 }
@@ -120,9 +124,17 @@ private struct SessionWireFormat: Decodable {
     var pid: Int64
     var startedAt: Int64
     var ts: Int64
+    /// Path to the transcript JSONL — read by `TranscriptTitle` for the AI-authored session title.
+    var transcript: String
+    /// Reserved for Hito 2 (click-to-focus / D11); tolerantly decoded now so the wire format is
+    /// already forward-compatible.
+    var terminalHost: String
+    var titleTag: String
+    var host: String
 
     enum CodingKeys: String, CodingKey {
         case state, provider, name, label, tool, project, cwd, sessionId, pid, startedAt, ts
+        case transcript, terminalHost, titleTag, host
     }
 
     init(from decoder: Decoder) throws {
@@ -138,5 +150,9 @@ private struct SessionWireFormat: Decodable {
         pid = (try? container.decode(Int64.self, forKey: .pid)) ?? 0
         startedAt = (try? container.decode(Int64.self, forKey: .startedAt)) ?? 0
         ts = (try? container.decode(Int64.self, forKey: .ts)) ?? 0
+        transcript = (try? container.decode(String.self, forKey: .transcript)) ?? ""
+        terminalHost = (try? container.decode(String.self, forKey: .terminalHost)) ?? ""
+        titleTag = (try? container.decode(String.self, forKey: .titleTag)) ?? ""
+        host = (try? container.decode(String.self, forKey: .host)) ?? ""
     }
 }

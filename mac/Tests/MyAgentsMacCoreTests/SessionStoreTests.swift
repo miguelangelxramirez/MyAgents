@@ -50,6 +50,51 @@ final class SessionStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testRefresh_resolvesDisplayName_preferringTranscriptAITitle_overRawName() throws {
+        // Reproduces the reported bug directly: a hook file whose `name` is empty (as
+        // `lifecycle.js` leaves it before the first prompt lands) must NOT show the folder twice —
+        // it must show the transcript's ai-title once TranscriptTitle reads it.
+        let transcriptFile = tempDirectory.appendingPathComponent("transcript.jsonl")
+        try #"{"type":"ai-title","aiTitle":"Fix duplicated folder name"}"#
+            .write(to: transcriptFile, atomically: true, encoding: .utf8)
+
+        try """
+        {"state":"idle","provider":"claude","sessionId":"titled","name":"","project":"MyAgents",\
+        "transcript":"\(transcriptFile.path)","pid":\(ProcessInfo.processInfo.processIdentifier)}
+        """.write(to: tempDirectory.appendingPathComponent("titled.json"), atomically: true, encoding: .utf8)
+
+        let store = SessionStore(
+            scanner: SessionScanner(directoryURL: tempDirectory),
+            discoverProcesses: { [] }
+        )
+        store.refresh()
+
+        let session = try XCTUnwrap(store.sessions.first { $0.id == "titled" })
+        XCTAssertEqual(session.displayName, "Fix duplicated folder name")
+    }
+
+    @MainActor
+    func testRefresh_emptyNameNoTranscriptTitle_neverDuplicatesFolder() throws {
+        // Same empty-`name` shape as the bug report, but with no transcript at all (the exact
+        // real-world file from the bug report has no ai-title line yet) — the row must fall back
+        // to the placeholder, never repeat "MyAgents" as both the title and folder line.
+        try """
+        {"state":"tool","provider":"claude","sessionId":"no-title","name":"","project":"MyAgents",\
+        "pid":\(ProcessInfo.processInfo.processIdentifier)}
+        """.write(to: tempDirectory.appendingPathComponent("no-title.json"), atomically: true, encoding: .utf8)
+
+        let store = SessionStore(
+            scanner: SessionScanner(directoryURL: tempDirectory),
+            discoverProcesses: { [] }
+        )
+        store.refresh()
+
+        let session = try XCTUnwrap(store.sessions.first { $0.id == "no-title" })
+        XCTAssertNotEqual(session.displayName, "MyAgents", "the title line must never just repeat the folder")
+        XCTAssertEqual(session.folder, "MyAgents")
+    }
+
+    @MainActor
     func testStartThenStop_doesNotCrash_andPublishesAtLeastOnce() async throws {
         try #"{"state":"idle","provider":"claude","sessionId":"s1","pid":\#(ProcessInfo.processInfo.processIdentifier)}"#
             .write(to: tempDirectory.appendingPathComponent("s1.json"), atomically: true, encoding: .utf8)

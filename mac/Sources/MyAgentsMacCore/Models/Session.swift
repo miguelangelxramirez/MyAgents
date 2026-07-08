@@ -31,6 +31,27 @@ public struct Session: Identifiable, Equatable, Sendable {
     /// sets this — it's app-owned state a future `SessionStore` clears when the row is clicked.
     public var pending: Bool
 
+    /// Path to the Claude Code transcript JSONL for this session (`transcript` in the wire
+    /// format), if the hook reported one. Read by `TranscriptTitle` to find the AI-authored title
+    /// — not used for anything else yet (D11: also reserved for Hito 2 click-to-focus).
+    public var transcript: String
+    /// Terminal identity the hook captured (`terminalHost` in the wire format, e.g.
+    /// `"Apple_Terminal"`, `"iTerm.app"`) — unused until Hito 2's click-to-focus.
+    public var terminalHost: String
+    /// Focus marker the hook wrote into the terminal's tab/window title (`titleTag` in the wire
+    /// format) — unused until Hito 2's click-to-focus.
+    public var titleTag: String
+    /// Host platform the hook ran on (`host` in the wire format, e.g. `"darwin"`) — unused today,
+    /// reserved for Hito 2/3.
+    public var host: String
+
+    /// The title actually shown on the row's top line, resolved by `SessionDisplayName.resolve`
+    /// (AI-authored transcript title → hook `name` → localized placeholder — NEVER the folder
+    /// name, which is what caused the folder to show twice). Populated by `SessionStore` before a
+    /// session reaches the UI; empty only means "not yet resolved" — `resolve` always returns a
+    /// non-empty string, so an empty value is a safe sentinel, never a legitimate title.
+    public var displayName: String
+
     public init(
         id: String,
         name: String = "",
@@ -42,7 +63,12 @@ public struct Session: Identifiable, Equatable, Sendable {
         startedAt: Date? = nil,
         updatedAt: Date? = nil,
         ownerPid: Int32? = nil,
-        pending: Bool = false
+        pending: Bool = false,
+        transcript: String = "",
+        terminalHost: String = "",
+        titleTag: String = "",
+        host: String = "",
+        displayName: String = ""
     ) {
         self.id = id
         self.name = name
@@ -55,6 +81,11 @@ public struct Session: Identifiable, Equatable, Sendable {
         self.updatedAt = updatedAt
         self.ownerPid = ownerPid
         self.pending = pending
+        self.transcript = transcript
+        self.terminalHost = terminalHost
+        self.titleTag = titleTag
+        self.host = host
+        self.displayName = displayName
     }
 
     // MARK: - Derived flags (mirror `SessionState.cs`'s `NeedsAttention`/`IsBusy`/`IsStale`)

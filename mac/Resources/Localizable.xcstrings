@@ -177,8 +177,8 @@
     },
     "session.untitled" : {
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Session" } },
-        "es" : { "stringUnit" : { "state" : "translated", "value" : "Sesión" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "New session" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Sesión nueva" } }
       }
     },
     "sessions.empty" : {

@@ -89,6 +89,9 @@ final class SessionScannerTests: XCTestCase {
           "project": "MyAgents",
           "cwd": "/Users/me/MyAgents",
           "host": "darwin",
+          "terminalHost": "Apple_Terminal",
+          "titleTag": "MyAgents ⟦cc:sess-001⟧",
+          "transcript": "/Users/me/.claude/projects/-Users-me-MyAgents/sess-001.jsonl",
           "sessionId": "sess-001",
           "pid": 4242,
           "startedAt": 1719400000,
@@ -111,6 +114,27 @@ final class SessionScannerTests: XCTestCase {
         XCTAssertEqual(session.startedAt, Date(timeIntervalSince1970: 1719400000))
         XCTAssertEqual(session.updatedAt, Date(timeIntervalSince1970: 1719400042))
         XCTAssertFalse(session.pending)
+        XCTAssertEqual(session.host, "darwin")
+        XCTAssertEqual(session.terminalHost, "Apple_Terminal")
+        XCTAssertEqual(session.titleTag, "MyAgents \u{27e6}cc:sess-001\u{27e7}")
+        XCTAssertEqual(session.transcript, "/Users/me/.claude/projects/-Users-me-MyAgents/sess-001.jsonl")
+    }
+
+    func testNewWireFields_missingFromJSON_tolerantlyDefaultToEmptyString() throws {
+        // Real-world hostile case: an OLDER hook version that predates D11's wire-format
+        // expansion, writing a session file with none of the new keys. Must decode fine, not skip
+        // the file, and leave the new fields as "" rather than failing.
+        let json = #"{"state":"idle","provider":"claude","sessionId":"legacy-session"}"#
+        try write(json, named: "legacy.json")
+        let scanner = SessionScanner(directoryURL: tempDirectory)
+        let sessions = scanner.scanSessions()
+
+        XCTAssertEqual(sessions.count, 1)
+        let session = try XCTUnwrap(sessions.first)
+        XCTAssertEqual(session.transcript, "")
+        XCTAssertEqual(session.terminalHost, "")
+        XCTAssertEqual(session.titleTag, "")
+        XCTAssertEqual(session.host, "")
     }
 
     func testSessionIdFallsBackToFileName_whenMissingFromJSON() throws {

@@ -18,7 +18,7 @@ struct SessionRowView: View {
 
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.xxs / 2) {
                     topLine
-                    Text(session.folder.isEmpty ? " " : session.folder)
+                    Text(folderLineText)
                         .font(DesignTokens.Typography.caption)
                         .foregroundStyle(DesignTokens.Colors.secondaryForeground)
                         .lineLimit(1)
@@ -107,10 +107,24 @@ struct SessionRowView: View {
 
     // MARK: - Derived presentation
 
+    /// The title line — resolved off the main thread by `SessionStore`
+    /// (`SessionDisplayName.resolve`, preferring the transcript's AI-authored title over the raw
+    /// hook `name`, and NEVER falling back to the folder). Guarded against an unresolved/empty
+    /// value (e.g. a preview constructing a `Session` directly) by re-resolving locally — this is
+    /// pure and I/O-free, so it's safe to call from the view.
     private var displayName: String {
-        if !session.name.isEmpty { return session.name }
-        if !session.folder.isEmpty { return session.folder }
-        return String(localized: "session.untitled", defaultValue: "Session")
+        session.displayName.isEmpty
+            ? SessionDisplayName.resolve(aiTitle: nil, name: session.name, folder: session.folder)
+            : session.displayName
+    }
+
+    /// The folder line. `SessionDisplayName.resolve` guarantees the title never just repeats the
+    /// folder, but this is a last-resort belt-and-braces check: if some edge case ever DID produce
+    /// an identical title and folder, showing the same text twice is exactly the bug being fixed —
+    /// so blank the second line instead.
+    private var folderLineText: String {
+        if session.folder.isEmpty { return " " }
+        return displayName.caseInsensitiveCompare(session.folder) == .orderedSame ? " " : session.folder
     }
 
     private var providerColor: Color {
@@ -136,6 +150,9 @@ struct SessionRowView: View {
     }
 
     private var accessibilityLabel: String {
-        "\(displayName), \(session.folder), \(session.state.localizedLabel)"
+        let folderPart = folderLineText.trimmingCharacters(in: .whitespaces)
+        return folderPart.isEmpty
+            ? "\(displayName), \(session.state.localizedLabel)"
+            : "\(displayName), \(folderPart), \(session.state.localizedLabel)"
     }
 }
