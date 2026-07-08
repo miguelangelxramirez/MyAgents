@@ -25,6 +25,18 @@
         "es" : { "stringUnit" : { "state" : "translated", "value" : "fecha de compilación desconocida" } }
       }
     },
+    "codex.state.awaiting-approval" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Awaiting your approval" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Esperando tu aprobación" } }
+      }
+    },
+    "codex.state.working" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Working" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Trabajando" } }
+      }
+    },
     "focus.failed" : {
       "localizations" : {
         "en" : { "stringUnit" : { "state" : "translated", "value" : "Couldn't open that session's terminal" } },

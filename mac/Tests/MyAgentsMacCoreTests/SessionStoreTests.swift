@@ -26,6 +26,13 @@ final class SessionStoreTests: XCTestCase {
         try super.tearDownWithError()
     }
 
+    /// A `CodexSessionScanner` pointed at a directory that doesn't exist — every `SessionStore` in
+    /// this file MUST use this instead of the real-`~/.codex` default (METODOLOGIA §4: tests never
+    /// touch a real user directory), even in tests that don't care about Codex naming at all.
+    private var isolatedCodexSessionScanner: CodexSessionScanner {
+        CodexSessionScanner(sessionsRoot: tempDirectory.appendingPathComponent("no-such-codex-sessions", isDirectory: true))
+    }
+
     @MainActor
     func testRefresh_dropsDeadSession_addsDiscoveredRow_andOrdersAttentionFirst() throws {
         // Two rows on disk: one with a dead owner pid (must be dropped), one idle with no pid
@@ -39,7 +46,8 @@ final class SessionStoreTests: XCTestCase {
 
         let store = SessionStore(
             scanner: SessionScanner(directoryURL: tempDirectory),
-            discoverProcesses: { [liveProcess] }
+            discoverProcesses: { [liveProcess] },
+            codexSessionScanner: isolatedCodexSessionScanner
         )
 
         store.refresh()
@@ -65,7 +73,8 @@ final class SessionStoreTests: XCTestCase {
 
         let store = SessionStore(
             scanner: SessionScanner(directoryURL: tempDirectory),
-            discoverProcesses: { [] }
+            discoverProcesses: { [] },
+            codexSessionScanner: isolatedCodexSessionScanner
         )
         store.refresh()
 
@@ -85,7 +94,8 @@ final class SessionStoreTests: XCTestCase {
 
         let store = SessionStore(
             scanner: SessionScanner(directoryURL: tempDirectory),
-            discoverProcesses: { [] }
+            discoverProcesses: { [] },
+            codexSessionScanner: isolatedCodexSessionScanner
         )
         store.refresh()
 
@@ -102,7 +112,8 @@ final class SessionStoreTests: XCTestCase {
         let store = SessionStore(
             scanner: SessionScanner(directoryURL: tempDirectory),
             pollInterval: 0.05,
-            discoverProcesses: { [] }
+            discoverProcesses: { [] },
+            codexSessionScanner: isolatedCodexSessionScanner
         )
         store.start()
         // Give the poll loop a couple of cycles to run.
@@ -110,5 +121,105 @@ final class SessionStoreTests: XCTestCase {
         store.stop()
 
         XCTAssertTrue(store.sessions.contains { $0.id == "s1" }, "own test-process pid is genuinely alive, so this row must survive the join")
+    }
+
+    // MARK: - Codex naming from rollout transcripts (Hito 2 Ronda B)
+
+    private var codexSessionsRoot: URL { tempDirectory.appendingPathComponent("codex-sessions", isDirectory: true) }
+
+    private func writeCodexRollout(sessionId: String, cwd: String, userText: String) throws {
+        let file = codexSessionsRoot.appendingPathComponent("2026/07/08/rollout-\(sessionId).jsonl")
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let metaLine = #"{"timestamp":"2026-07-08T16:43:26.739Z","type":"session_meta","payload":{"session_id":"\#(sessionId)","id":"\#(sessionId)","cwd":"\#(cwd)"}}"#
+        let userLine = #"{"timestamp":"2026-07-08T16:43:28.283Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"\#(userText)"}]}}"#
+        try (metaLine + "\n" + userLine + "\n").write(to: file, atomically: true, encoding: .utf8)
+    }
+
+    /// A Codex session discovered as a bare process row (no hook file at all — the common case on
+    /// macOS, since Codex has no reliable hook mechanism there) must show the rollout's real first
+    /// prompt as its title once a matching rollout can be found by cwd. Bites: revert the
+    /// `codexSessionScanner.latestSession`/`name(forCwd:)` wiring in `SessionStore.apply` and this
+    /// falls back to the placeholder instead of the real prompt.
+    @MainActor
+    func testRefresh_codexDiscoveredRow_withDiscoverableRollout_showsPromptDerivedName() throws {
+        try writeCodexRollout(sessionId: "codex-1", cwd: "/Users/me/lapiz-rojo", userText: "Arregla el bug del boton guardar")
+        let liveProcess = ProcessLiveness.DiscoveredProcess(pid: 4242, provider: .codex, cwd: "/Users/me/lapiz-rojo", executablePath: "")
+
+        let store = SessionStore(
+            scanner: SessionScanner(directoryURL: tempDirectory),
+            discoverProcesses: { [liveProcess] },
+            codexSessionScanner: CodexSessionScanner(sessionsRoot: codexSessionsRoot)
+        )
+        store.refresh()
+
+        let session = try XCTUnwrap(store.sessions.first { $0.ownerPid == 4242 })
+        XCTAssertEqual(session.displayName, "Arregla el bug del boton guardar")
+        XCTAssertEqual(session.provider, .codex)
+    }
+
+    /// The same discovered-row shape, but with NO rollout anywhere that matches its cwd — must
+    /// fall back to the existing placeholder behavior, NEVER a wrong/guessed name and never the
+    /// folder repeated as the title (mirrors `testRefresh_emptyNameNoTranscriptTitle_neverDuplicatesFolder`
+    /// for Claude).
+    @MainActor
+    func testRefresh_codexDiscoveredRow_noMatchingRollout_showsPlaceholderNotWrongName() throws {
+        // A rollout exists, but for a DIFFERENT cwd — proves this isn't just "any rollout wins".
+        try writeCodexRollout(sessionId: "codex-elsewhere", cwd: "/Users/me/some-other-project", userText: "Unrelated task")
+        let liveProcess = ProcessLiveness.DiscoveredProcess(pid: 4343, provider: .codex, cwd: "/Users/me/no-rollout-here", executablePath: "")
+
+        let store = SessionStore(
+            scanner: SessionScanner(directoryURL: tempDirectory),
+            discoverProcesses: { [liveProcess] },
+            codexSessionScanner: CodexSessionScanner(sessionsRoot: codexSessionsRoot)
+        )
+        store.refresh()
+
+        let session = try XCTUnwrap(store.sessions.first { $0.ownerPid == 4343 })
+        XCTAssertEqual(session.folder, "no-rollout-here")
+        XCTAssertNotEqual(session.displayName, "Unrelated task", "must never borrow another cwd's rollout name")
+        XCTAssertNotEqual(session.displayName, session.folder, "the title line must never just repeat the folder")
+    }
+
+    /// Two Codex rollouts share the SAME cwd (two terminals in one project) — `name(forCwd:)` is
+    /// ambiguous by design (`CodexNameCache`), so the discovered row must fall back to the
+    /// placeholder rather than borrow either session's name. Bites: remove the ambiguity guard in
+    /// `CodexNameCache.name(forCwd:)` and this starts asserting a specific (wrong, guessed) name.
+    @MainActor
+    func testRefresh_codexDiscoveredRow_ambiguousCwd_neverGuessesAName() throws {
+        try writeCodexRollout(sessionId: "codex-a", cwd: "/Users/me/shared-terminals", userText: "First terminal's task")
+        try writeCodexRollout(sessionId: "codex-b", cwd: "/Users/me/shared-terminals", userText: "Second terminal's task")
+        let liveProcess = ProcessLiveness.DiscoveredProcess(pid: 4444, provider: .codex, cwd: "/Users/me/shared-terminals", executablePath: "")
+
+        let store = SessionStore(
+            scanner: SessionScanner(directoryURL: tempDirectory),
+            discoverProcesses: { [liveProcess] },
+            codexSessionScanner: CodexSessionScanner(sessionsRoot: codexSessionsRoot)
+        )
+        store.refresh()
+
+        let session = try XCTUnwrap(store.sessions.first { $0.ownerPid == 4444 })
+        XCTAssertNotEqual(session.displayName, "First terminal's task")
+        XCTAssertNotEqual(session.displayName, "Second terminal's task")
+    }
+
+    /// Claude rows must be completely unaffected by the Codex-rollout enrichment path — a Claude
+    /// session sharing a cwd with a Codex rollout must not have its name touched at all.
+    @MainActor
+    func testRefresh_claudeRow_neverEnrichedFromCodexRollout() throws {
+        try writeCodexRollout(sessionId: "codex-x", cwd: "/Users/me/shared-with-claude", userText: "Codex's own prompt")
+        try """
+        {"state":"idle","provider":"claude","sessionId":"claude-row","name":"","project":"shared-with-claude",\
+        "cwd":"/Users/me/shared-with-claude","pid":\(ProcessInfo.processInfo.processIdentifier)}
+        """.write(to: tempDirectory.appendingPathComponent("claude-row.json"), atomically: true, encoding: .utf8)
+
+        let store = SessionStore(
+            scanner: SessionScanner(directoryURL: tempDirectory),
+            discoverProcesses: { [] },
+            codexSessionScanner: CodexSessionScanner(sessionsRoot: codexSessionsRoot)
+        )
+        store.refresh()
+
+        let session = try XCTUnwrap(store.sessions.first { $0.id == "claude-row" })
+        XCTAssertNotEqual(session.displayName, "Codex's own prompt")
     }
 }
