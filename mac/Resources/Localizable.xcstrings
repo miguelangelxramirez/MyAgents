@@ -25,6 +25,12 @@
         "es" : { "stringUnit" : { "state" : "translated", "value" : "fecha de compilación desconocida" } }
       }
     },
+    "focus.failed" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Couldn't open that session's terminal" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "No se pudo abrir la terminal de esa sesión" } }
+      }
+    },
     "glyph.a11y.attention" : {
       "localizations" : {
         "en" : { "stringUnit" : { "state" : "translated", "value" : "MyAgents — a session is awaiting permission" } },

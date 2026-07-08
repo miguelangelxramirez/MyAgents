@@ -118,6 +118,12 @@ final class AppViewModel: ObservableObject {
 
     // MARK: - Transient message
 
+    /// Shows a short, already-localized note under the header (e.g. a click-to-focus failure).
+    /// Never pass a raw `error.localizedDescription` here — internal detail goes to the log.
+    func showTransientMessage(_ message: String) {
+        show(message: message)
+    }
+
     private func show(message: String) {
         transientMessage = message
         messageClearWorkItem?.cancel()

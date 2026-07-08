@@ -10,7 +10,7 @@ struct PopoverRootView: View {
     @ObservedObject var preferences: AppPreferences
     @ObservedObject var model: AppViewModel
 
-    /// Clears a session's pending flag (Hito 2 will also focus its terminal).
+    /// Opens a session: clears its pending dot and focuses its terminal (see `AppDelegate.activate`).
     let onActivateSession: (Session) -> Void
 
     var body: some View {

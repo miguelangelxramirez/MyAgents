@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let preferences = AppPreferences()
     private let model = AppViewModel()
     private let notifier = PermissionNotifier()
+    private let terminalFocuser = TerminalFocuser()
 
     private var cancellables: Set<AnyCancellable> = []
     private let logger = Logger(subsystem: "com.miguelangelramirez.myagents.mac", category: "AppDelegate")
@@ -122,12 +123,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Clears the session's pending marker. TODO (Hito 2): focus the owning terminal here
-    /// (AppleScript/AX). Deliberately no fake focus behaviour today.
+    /// Clicking a row: acknowledge it (clear the pending dot now) and bring its terminal — the exact
+    /// tab where the terminal's scripting allows — to the front. The focus runs off the main thread
+    /// (Apple Events round-trip / app lookup); a failure shows a localized note, never a crash.
     private func activate(_ session: Session) {
-        logger.debug("Session row activated: \(session.id, privacy: .public) — pending cleared (terminal focus is Hito 2)")
-        // Pending is app-owned state; clearing it here is the honest, non-faked behaviour for now.
-        // (SessionStore rebuilds rows from disk each poll; a persistent 'seen' set lands with the
-        // focus work in Hito 2, alongside the wire-format additions in D11.)
+        // The click is the "opened" signal: clear pending immediately regardless of focus outcome.
+        sessionStore.markSeen(session.id)
+
+        let focuser = terminalFocuser
+        let terminalHost = session.terminalHost
+        let titleTag = session.titleTag
+        let id = session.id
+        Task.detached { [weak self] in
+            let result = focuser.focus(terminalHost: terminalHost, titleTag: titleTag)
+            await self?.handleFocusResult(result, sessionID: id)
+        }
+    }
+
+    private func handleFocusResult(_ result: TerminalFocusResult, sessionID: String) {
+        switch result {
+        case .focusedTab, .focusedWindow, .appActivatedOnly:
+            logger.debug("Focus \(sessionID, privacy: .public): \(String(describing: result), privacy: .public)")
+        case .failed(let reason):
+            logger.info("Focus \(sessionID, privacy: .public) failed: \(String(describing: reason), privacy: .public)")
+            model.showTransientMessage(String(localized: "focus.failed", defaultValue: "Couldn't open that session's terminal"))
+        }
     }
 }

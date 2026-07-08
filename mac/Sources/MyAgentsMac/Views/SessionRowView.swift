@@ -5,8 +5,8 @@ import MyAgentsMacCore
 /// timer while busy, a pending dot, and an amber wash when the session needs a human.
 struct SessionRowView: View {
     let session: Session
-    /// Clears the pending flag. TODO (Hito 2): also focus the owning terminal (AppleScript/AX) —
-    /// deliberately NOT faked here; today the click only dismisses the "unopened" dot.
+    /// Opens the session: clears the pending "unopened" dot and brings its terminal (the exact tab
+    /// where the terminal's scripting allows) to the front. Wired in `AppDelegate.activate`.
     let onActivate: () -> Void
 
     @State private var isHovering = false

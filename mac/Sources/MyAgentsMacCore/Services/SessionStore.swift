@@ -23,6 +23,10 @@ public final class SessionStore: ObservableObject {
     private let transcriptTitle: TranscriptTitle
     private let pollInterval: TimeInterval
     private var pollTask: Task<Void, Never>?
+    /// In-memory "finished-but-unopened" state, folded into every published list. Owned here (not
+    /// in the scanner) because it's derived from what the app watched happen across polls, not from
+    /// disk. See `PendingTracker`.
+    private var pendingTracker = PendingTracker()
 
     /// - Parameters:
     ///   - pollInterval: seconds between scans while `start()` is running. Default 0.5s — "a few
@@ -107,6 +111,18 @@ public final class SessionStore: ObservableObject {
             resolved.displayName = SessionDisplayName.resolve(aiTitle: nil, name: session.name, folder: session.folder)
             return resolved
         }
-        sessions = SessionOrdering.attentionFirst(withNames)
+        // Compute the pending dot from watched busy→finished transitions, then order attention-first
+        // (pending doesn't affect ordering, so either order works; this keeps the tracker's view of
+        // "current sessions" in sync with what we publish).
+        let withPending = pendingTracker.apply(to: withNames)
+        sessions = SessionOrdering.attentionFirst(withPending)
+    }
+
+    /// Marks a session as opened (the row was clicked) — clears its pending dot immediately, without
+    /// waiting for the next poll. The dot re-arms if the session goes busy again (see
+    /// `PendingTracker`).
+    public func markSeen(_ id: String) {
+        pendingTracker.markSeen(id)
+        sessions = pendingTracker.apply(to: sessions)
     }
 }
