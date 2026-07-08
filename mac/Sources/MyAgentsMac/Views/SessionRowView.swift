@@ -86,6 +86,13 @@ struct SessionRowView: View {
             Image(systemName: stateSymbol)
                 .font(DesignTokens.Typography.caption)
                 .foregroundStyle(stateColor)
+                // Make a WORKING session unmistakable (user feedback: "tengo una trabajando y no
+                // sale NINGUNA trabajando"). While busy (thinking / tool) the state glyph pulses in
+                // the provider colour — the macOS-native equivalent of the Windows "moving glyph".
+                // `.symbolEffect` is energy-aware: the system runs it ONLY while the view is on
+                // screen, so it stops the instant the popover closes (no forever-Timer). Idle/ended
+                // rows pass `isActive: false` and stay calm.
+                .symbolEffect(.pulse, options: .repeating, isActive: session.isBusy)
             Text(session.state.localizedLabel)
                 .font(DesignTokens.Typography.caption)
                 .foregroundStyle(stateColor)

@@ -1,9 +1,9 @@
 import SwiftUI
 import MyAgentsMacCore
 
-/// The popover's SwiftUI content: header (with an optional small usage summary line, Fix 4) + ⚙
-/// menu, then either first-run onboarding or the live session list. Thin — every decision it makes
-/// (ordering, glyph state, elapsed time, usage formatting) is a tested Core function.
+/// The popover's SwiftUI content: header + ⚙ menu, then either first-run onboarding or the live
+/// session list, with the optional usage section pinned at the bottom. Thin — every decision it
+/// makes (ordering, glyph state, elapsed time, usage severity) is a tested Core function.
 struct PopoverRootView: View {
     @ObservedObject var sessionStore: SessionStore
     @ObservedObject var usageStore: UsageStore
@@ -35,41 +35,15 @@ struct PopoverRootView: View {
     // MARK: - Header
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Spacing.xxs / 2) {
-            HStack(spacing: DesignTokens.Spacing.xs) {
-                Text(String(localized: "menu.title", defaultValue: "MyAgents"))
-                    .font(DesignTokens.Typography.title)
-                    .foregroundStyle(DesignTokens.Colors.foreground)
-                Spacer()
-                SettingsMenu(preferences: preferences, model: model)
-            }
-            if preferences.showUsage {
-                usageSummary
-            }
+        HStack(spacing: DesignTokens.Spacing.xs) {
+            Text(String(localized: "menu.title", defaultValue: "MyAgents"))
+                .font(DesignTokens.Typography.title)
+                .foregroundStyle(DesignTokens.Colors.foreground)
+            Spacer()
+            SettingsMenu(preferences: preferences, model: model)
         }
         .padding(.horizontal, DesignTokens.Spacing.s)
         .padding(.vertical, DesignTokens.Spacing.xs)
-    }
-
-    /// Fix 4 (live user feedback, 2026-07-09): usage shown small, at the top, INSTEAD OF the
-    /// menu-bar % badge and the old bottom bars section. One tight mono line per provider, e.g.
-    /// `"Claude · 5h 30% · 7d 91%"`; Codex only gets its own line once it has ever reported a
-    /// reading, so a Codex-less setup doesn't show a permanent "— · —" line for a provider that
-    /// isn't in use.
-    @ViewBuilder
-    private var usageSummary: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Spacing.xxs / 2) {
-            usageLine(title: String(localized: "usage.claude", defaultValue: "Claude"), info: usageStore.claude)
-            if usageStore.codex.hasFiveHourReading || usageStore.codex.hasSevenDayReading {
-                usageLine(title: String(localized: "usage.codex", defaultValue: "Codex"), info: usageStore.codex)
-            }
-        }
-    }
-
-    private func usageLine(title: String, info: UsageInfo) -> some View {
-        Text(UsageSummaryFormatter.line(providerTitle: title, info: info))
-            .font(DesignTokens.Typography.monoCaption)
-            .foregroundStyle(info.isStale ? DesignTokens.Colors.idle : DesignTokens.Colors.secondaryForeground)
     }
 
     private func transientBanner(_ message: String) -> some View {
@@ -89,6 +63,13 @@ struct PopoverRootView: View {
             OnboardingView(onEnable: { model.installHooks() })
         } else {
             sessionList
+
+            if preferences.showUsage {
+                Divider().overlay(DesignTokens.Colors.hairline)
+                UsageSectionView(claude: usageStore.claude, codex: usageStore.codex)
+                    .padding(.horizontal, DesignTokens.Spacing.s)
+                    .padding(.vertical, DesignTokens.Spacing.s)
+            }
         }
     }
 

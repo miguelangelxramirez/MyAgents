@@ -127,6 +127,8 @@ public enum DesignTokens {
         public static let dotSize: CGFloat = 7
         /// Menu-bar glyph point size (drawn into the status item image).
         public static let glyphPointSize: CGFloat = 15
+        /// Font size of the composed "% badge" text drawn next to the menu-bar glyph.
+        public static let glyphBadgeFontSize: CGFloat = 9
         /// Max height of the scrolling session list before it scrolls instead of growing.
         public static let popoverMaxListHeight: CGFloat = 320
         /// Fixed columns in a usage row so bars line up across providers.

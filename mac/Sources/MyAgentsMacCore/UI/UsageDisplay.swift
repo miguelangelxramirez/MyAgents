@@ -32,25 +32,3 @@ public enum UsageAge {
         return Int(seconds / 60)
     }
 }
-
-/// Builds the compact one-line usage summary shown small at the TOP of the popover (Fix 4, live
-/// user feedback 2026-07-09: "ponlo aparte arriba... algo en pequeñito", replacing the menu-bar %
-/// badge and the bottom usage-bars section). e.g. `"Claude · 5h 30% · 7d 91%"`. Pure and
-/// `@MainActor`-free so it's directly unit-testable; the view layer only supplies colour/greying.
-///
-/// A missing percentage renders as "—" (the `usage.unknown` key) — NEVER a fabricated `0%`, same
-/// law `UsageInfo` always followed.
-public enum UsageSummaryFormatter {
-    public static func line(providerTitle: String, info: UsageInfo) -> String {
-        let five = valueText(info.fiveHourPercent)
-        let seven = valueText(info.sevenDayPercent)
-        return String(localized: "usage.summary.line", defaultValue: "\(providerTitle) · 5h \(five) · 7d \(seven)")
-    }
-
-    private static func valueText(_ percent: Double?) -> String {
-        guard let percent else {
-            return String(localized: "usage.unknown", defaultValue: "—")
-        }
-        return "\(Int(percent.rounded()))%"
-    }
-}

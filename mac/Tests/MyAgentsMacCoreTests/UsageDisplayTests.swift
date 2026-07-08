@@ -37,21 +37,4 @@ final class UsageDisplayTests: XCTestCase {
         let now = Date()
         XCTAssertEqual(UsageAge.minutes(since: now.addingTimeInterval(30), now: now), 0)
     }
-
-    // MARK: - UsageSummaryFormatter (Fix 4: small top-of-popover usage line)
-
-    func testSummaryLine_bothWindowsKnown_showsRoundedPercents() {
-        let info = UsageInfo(provider: .claude, fiveHourPercent: 29.6, sevenDayPercent: 91.4)
-        XCTAssertEqual(UsageSummaryFormatter.line(providerTitle: "Claude", info: info), "Claude · 5h 30% · 7d 91%")
-    }
-
-    func testSummaryLine_unknownWindow_showsEmDash_neverFakeZero() {
-        let info = UsageInfo(provider: .codex, fiveHourPercent: nil, sevenDayPercent: 12)
-        XCTAssertEqual(UsageSummaryFormatter.line(providerTitle: "Codex", info: info), "Codex · 5h — · 7d 12%")
-    }
-
-    func testSummaryLine_bothWindowsUnknown_isAllEmDashes() {
-        let info = UsageInfo.unknown(provider: .claude)
-        XCTAssertEqual(UsageSummaryFormatter.line(providerTitle: "Claude", info: info), "Claude · 5h — · 7d —")
-    }
 }
