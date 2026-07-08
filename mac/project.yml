@@ -23,6 +23,24 @@ targets:
     deploymentTarget: "26.0"
     sources:
       - path: Sources/MyAgentsMacCore
+      # The 4 Node scripts a running hook actually requires at runtime (mirrors the `FILES`
+      # array in ../hooks/install.js). `install.js`/`uninstall.js`/`install-codex.js` are the
+      # standalone fallback entry points — not bundled, since no hook invokes them directly.
+      # `HookInstaller` copies these into ~/.claude/statusbar/ at install time.
+      # NOTE: XcodeGen targets have no top-level `resources:` key (a prior version of this file
+      # used one — it silently no-ops); resources are `sources:` entries with `buildPhase: resources`.
+      - path: ../hooks/_common.js
+        buildPhase: resources
+        group: Hooks
+      - path: ../hooks/update.js
+        buildPhase: resources
+        group: Hooks
+      - path: ../hooks/lifecycle.js
+        buildPhase: resources
+        group: Hooks
+      - path: ../hooks/statusline.js
+        buildPhase: resources
+        group: Hooks
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.miguelangelramirez.myagents.mac.core
@@ -36,8 +54,10 @@ targets:
     deploymentTarget: "26.0"
     sources:
       - path: Sources/MyAgentsMac
-    resources:
+      # Fixed alongside the Core scripts above: same `resources:` no-op affected this file too
+      # (it was silently never copied into the app bundle since Hito 0/Round 1).
       - path: Resources/Localizable.xcstrings
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.miguelangelramirez.myagents.mac
