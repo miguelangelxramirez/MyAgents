@@ -79,6 +79,62 @@ final class ProcessLivenessTests: XCTestCase {
         )
     }
 
+    // MARK: - Pure classification (the real-world shapes, without spawning anything)
+
+    func testClaudeRenamedToItsVersion_isClassifiedByExecutablePath() {
+        // The regression that made the app "detect no working sessions": modern Claude Code renames
+        // its own process to its version, so `pbi_name` is "2.1.204" — useless. It must still be
+        // recognised by its install path.
+        let provider = ProcessLiveness.provider(
+            name: "2.1.204",
+            executablePath: "/Users/me/.local/share/claude/versions/2.1.204",
+            arguments: ["claude"]
+        )
+        XCTAssertEqual(provider, .claude)
+    }
+
+    func testCodexNativeBinary_isClassifiedByName() {
+        let provider = ProcessLiveness.provider(
+            name: "codex-aarch64-apple-darwin",
+            executablePath: "/opt/homebrew/Caskroom/codex/0.143.0/codex-aarch64-apple-darwin",
+            arguments: ["codex"]
+        )
+        XCTAssertEqual(provider, .codex)
+    }
+
+    func testNodeHostedClaude_isClassifiedByScriptArg() {
+        let provider = ProcessLiveness.provider(
+            name: "node",
+            executablePath: "/usr/local/bin/node",
+            arguments: ["node", "/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js"]
+        )
+        XCTAssertEqual(provider, .claude)
+    }
+
+    func testMcpServerMentioningCodexInEnvironment_isNotMisclassified() {
+        // `@playwright/mcp` runs under node and its argv/env mention "codex" (a plugin path), which
+        // a naive whole-argv substring scan wrongly flagged as a Codex session — one phantom row
+        // PER project, the "GameCozy codex repeated" bug. argv[1] is the real script; it has no
+        // "codex", so it must stay unclassified.
+        let provider = ProcessLiveness.provider(
+            name: "npm exec @playwright/mcp",
+            executablePath: "/opt/homebrew/bin/node",
+            arguments: ["node", "/Users/me/.npm/_npx/abc/node_modules/.bin/playwright-mcp", "--codex-plugin-path=/x/codex"]
+        )
+        XCTAssertNil(provider)
+    }
+
+    func testProjectFolderNamedLikeClaude_isNotMisclassified() {
+        // A user working in "/tmp/claude-501/…" running an unrelated tool must not be mistaken for
+        // Claude: "/claude-501/" is not the "/claude/" path component the real install has.
+        let provider = ProcessLiveness.provider(
+            name: "mytool",
+            executablePath: "/private/tmp/claude-501/build/mytool",
+            arguments: ["mytool"]
+        )
+        XCTAssertNil(provider)
+    }
+
     func testDiscoveredProcess_disappearsAfterItExits() throws {
         let fakeClaudeBinary = FileManager.default.temporaryDirectory
             .appendingPathComponent("ProcessLivenessTests-\(UUID().uuidString)")

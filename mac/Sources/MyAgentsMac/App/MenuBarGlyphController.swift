@@ -1,8 +1,21 @@
 import AppKit
 import MyAgentsMacCore
 
+/// Claude usage to badge next to the status glyph as two tiny vertical bars (5 h · 7 d) — the
+/// compact, number-free menu-bar readout Miguel picked over a "%" string. `nil` for any bucket the
+/// statusline hasn't reported yet (drawn as an empty track, never a fabricated 0 %); `isStale`
+/// greys both bars so an old reading can't masquerade as current.
+struct MenuBarUsage: Equatable {
+    var fiveHour: Double?
+    var sevenDay: Double?
+    var isStale: Bool
+
+    /// Whether there's anything to draw at all (both buckets unknown → hide the badge entirely).
+    var hasAnyReading: Bool { fiveHour != nil || sevenDay != nil }
+}
+
 /// Draws (and, only while something is busy, animates) the status-bar glyph, plus an optional
-/// composed "% badge".
+/// usage badge (two mini bars).
 ///
 /// The animation is a frame-swap `Timer` that re-renders the `NSImage` each tick — Core Animation
 /// on a status-item button is unreliable, so we redraw the image ourselves (per HITO1_DESIGN).
@@ -12,12 +25,21 @@ import MyAgentsMacCore
 final class MenuBarGlyphController {
     private weak var button: NSStatusBarButton?
     private var status: MenuBarStatus = MenuBarStatus(kind: .idle, busyProvider: nil)
-    /// Claude 5-hour percent to badge, or `nil` to hide the badge (usage disabled / unknown).
-    private var badgePercent: Double?
+    /// Claude 5 h/7 d usage to badge, or `nil` to hide the badge (usage disabled / all-unknown).
+    private var usage: MenuBarUsage?
 
     private var animationTimer: Timer?
     private var phase: CGFloat = 0
     private var hasRendered = false
+
+    // Mini-bar geometry (points). Two thin vertical bars sit to the right of the glyph.
+    private enum Bar {
+        static let width: CGFloat = 2.5
+        static let gap: CGFloat = 2          // between the two bars
+        static let leading: CGFloat = 4      // glyph → bars
+        static let height: CGFloat = 11      // capped below the ~15pt glyph so it reads as a badge
+        static let cornerRadius: CGFloat = 1.25
+    }
 
     init(button: NSStatusBarButton?) {
         self.button = button
@@ -25,12 +47,13 @@ final class MenuBarGlyphController {
 
     /// New data arrived. Re-evaluates the static/animated decision and redraws. Starting or
     /// stopping the timer is driven purely by `status.shouldAnimate`. A no-op update (same status
-    /// and badge, not animating) skips the redraw so we don't reallocate an identical `NSImage`
+    /// and usage, not animating) skips the redraw so we don't reallocate an identical `NSImage`
     /// on every poll — the animation timer owns redraws while busy.
-    func update(status: MenuBarStatus, badgePercent: Double?) {
-        let unchanged = hasRendered && status == self.status && badgePercent == self.badgePercent
+    func update(status: MenuBarStatus, usage: MenuBarUsage?) {
+        let effectiveUsage = (usage?.hasAnyReading ?? false) ? usage : nil
+        let unchanged = hasRendered && status == self.status && effectiveUsage == self.usage
         self.status = status
-        self.badgePercent = badgePercent
+        self.usage = effectiveUsage
         if status.shouldAnimate {
             startAnimating()
         } else {
@@ -73,14 +96,8 @@ final class MenuBarGlyphController {
     // MARK: - Rendering
 
     private func redraw() {
-        let badge = badgeString
-        let symbol = symbolImage(alpha: pulseAlpha, forceColored: badge != nil)
-        button?.image = compose(symbol: symbol, badge: badge)
-    }
-
-    private var badgeString: String? {
-        guard let badgePercent else { return nil }
-        return "\(Int(badgePercent.rounded()))%"
+        let symbol = symbolImage(alpha: pulseAlpha, forceColored: usage != nil)
+        button?.image = compose(symbol: symbol, usage: usage)
     }
 
     /// The tinted SF Symbol for the current state. Idle with no badge stays a *template* image so
@@ -132,21 +149,16 @@ final class MenuBarGlyphController {
         }
     }
 
-    /// Composites the symbol and (optional) badge into one image. With no badge the symbol is
-    /// returned untouched so the idle template case keeps its system tinting.
-    private func compose(symbol: NSImage, badge: String?) -> NSImage {
-        guard let badge, !badge.isEmpty else { return symbol }
+    // MARK: - Composition (symbol + optional mini bars)
 
-        let font = NSFont.systemFont(ofSize: DesignTokens.Metrics.glyphBadgeFontSize, weight: .semibold)
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: font,
-            .foregroundColor: NSColor(DesignTokens.Colors.idle),
-        ]
-        let text = badge as NSString
-        let textSize = text.size(withAttributes: attributes)
-        let gap: CGFloat = DesignTokens.Spacing.xxs / 2
-        let height = max(symbol.size.height, textSize.height)
-        let width = symbol.size.width + gap + textSize.width
+    /// Composites the symbol and (optional) two usage bars into one image. With no usage the symbol
+    /// is returned untouched so the idle template case keeps its system tinting.
+    private func compose(symbol: NSImage, usage: MenuBarUsage?) -> NSImage {
+        guard let usage else { return symbol }
+
+        let barsWidth = Bar.width * 2 + Bar.gap
+        let width = symbol.size.width + Bar.leading + barsWidth
+        let height = max(symbol.size.height, Bar.height)
 
         let image = NSImage(size: NSSize(width: width, height: height))
         image.lockFocus()
@@ -156,12 +168,50 @@ final class MenuBarGlyphController {
             width: symbol.size.width,
             height: symbol.size.height
         ))
-        text.draw(
-            at: NSPoint(x: symbol.size.width + gap, y: (height - textSize.height) / 2),
-            withAttributes: attributes
-        )
+
+        let barsOriginX = symbol.size.width + Bar.leading
+        let barBottom = (height - Bar.height) / 2
+        drawBar(percent: usage.fiveHour, stale: usage.isStale,
+                x: barsOriginX, bottom: barBottom)
+        drawBar(percent: usage.sevenDay, stale: usage.isStale,
+                x: barsOriginX + Bar.width + Bar.gap, bottom: barBottom)
+
         image.unlockFocus()
         image.isTemplate = false
         return image
+    }
+
+    /// One vertical bar: a faint full-height track, plus a fill from the bottom proportional to the
+    /// percent consumed, coloured by `UsageLevel` (provider accent → amber → red) or greyed when
+    /// the reading is stale. An unknown percent draws the track only — never a fabricated fill.
+    private func drawBar(percent: Double?, stale: Bool, x: CGFloat, bottom: CGFloat) {
+        let track = NSBezierPath(
+            roundedRect: NSRect(x: x, y: bottom, width: Bar.width, height: Bar.height),
+            xRadius: Bar.cornerRadius, yRadius: Bar.cornerRadius
+        )
+        NSColor(DesignTokens.Colors.usageTrack).setFill()
+        track.fill()
+
+        guard let percent else { return }
+        let fraction = max(0, min(1, percent / 100))
+        guard fraction > 0 else { return }
+        let fillHeight = max(Bar.width, Bar.height * fraction) // never thinner than the bar is wide
+        let fill = NSBezierPath(
+            roundedRect: NSRect(x: x, y: bottom, width: Bar.width, height: fillHeight),
+            xRadius: Bar.cornerRadius, yRadius: Bar.cornerRadius
+        )
+        fillColor(percent: percent, stale: stale).setFill()
+        fill.fill()
+    }
+
+    /// Provider accent normally; amber/red as the window fills; muted grey when stale — mirrors the
+    /// popover's `UsageSectionView` so the menu bar and the popover agree at a glance.
+    private func fillColor(percent: Double, stale: Bool) -> NSColor {
+        if stale { return NSColor(DesignTokens.Colors.idle) }
+        switch UsageLevel.forPercent(percent) {
+        case .normal: return NSColor(DesignTokens.Colors.claudeOrange)
+        case .warn: return NSColor(DesignTokens.Colors.usageWarn)
+        case .high: return NSColor(DesignTokens.Colors.usageHigh)
+        }
     }
 }

@@ -57,7 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.action = #selector(togglePopover)
             button.target = self
             glyphController = MenuBarGlyphController(button: button)
-            glyphController?.update(status: MenuBarStatus(kind: .idle, busyProvider: nil), badgePercent: nil)
+            glyphController?.update(status: MenuBarStatus(kind: .idle, busyProvider: nil), usage: nil)
         }
         statusItem = item
     }
@@ -91,7 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             .store(in: &cancellables)
 
-        // Usage + "show usage" preference → the composed % badge (Claude 5h).
+        // Usage + "show usage" preference → the menu-bar usage badge (Claude 5h/7d mini bars).
         usageStore.$claude
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.refreshGlyph() }
@@ -105,8 +105,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func refreshGlyph(sessions: [Session]? = nil) {
         let status = MenuBarStatus.evaluate(sessions ?? sessionStore.sessions)
-        let badge = preferences.showUsage ? usageStore.claude.fiveHourPercent : nil
-        glyphController?.update(status: status, badgePercent: badge)
+        let usage: MenuBarUsage?
+        if preferences.showUsage {
+            let claude = usageStore.claude
+            usage = MenuBarUsage(
+                fiveHour: claude.fiveHourPercent,
+                sevenDay: claude.sevenDayPercent,
+                isStale: claude.isStale
+            )
+        } else {
+            usage = nil
+        }
+        glyphController?.update(status: status, usage: usage)
     }
 
     // MARK: - Actions

@@ -80,16 +80,20 @@ public enum ProcessLiveness {
     // MARK: - Classification
 
     private static func classify(pid: pid_t) -> DiscoveredProcess? {
-        guard let shortName = processName(pid: pid) else { return nil }
+        let shortName = processName(pid: pid) ?? ""
         let executablePath = executablePath(pid: pid) ?? ""
+        let executableBase = (executablePath as NSString).lastPathComponent
 
-        if let provider = provider(matching: shortName) {
-            return DiscoveredProcess(pid: pid, provider: provider, cwd: cwd(pid: pid) ?? "", executablePath: executablePath)
-        }
+        // `argv` is only NEEDED for the node/bun/deno-hosted case (and as belt-and-braces for a
+        // Claude binary that renamed itself to its VERSION, e.g. "2.1.204"). Fetching it costs a
+        // `KERN_PROCARGS2` sysctl per pid, and this runs over the WHOLE process table twice a
+        // second — so we skip it for the vast majority of processes (energy law) and read it only
+        // when the cheap name/path signals could plausibly be hiding a hosted or version-named CLI.
+        let nameLooksVersioned = shortName.first?.isNumber ?? false
+        let needsArguments = isScriptHost(executableBase) || isScriptHost(shortName) || nameLooksVersioned
+        let arguments = needsArguments ? (processArguments(pid: pid) ?? []) : []
 
-        // The CLI often runs hosted by a script runtime (e.g.
-        // `node .../@anthropic-ai/claude-code/cli.js`) — the provider only shows up in argv then.
-        guard isScriptHost(shortName), let args = processArguments(pid: pid), let provider = provider(matchingAny: args) else {
+        guard let provider = provider(name: shortName, executablePath: executablePath, arguments: arguments) else {
             return nil
         }
         return DiscoveredProcess(pid: pid, provider: provider, cwd: cwd(pid: pid) ?? "", executablePath: executablePath)
@@ -99,16 +103,45 @@ public enum ProcessLiveness {
         ["node", "bun", "deno"].contains(name.lowercased())
     }
 
-    private static func provider(matching name: String) -> Provider? {
-        let lower = name.lowercased()
-        if lower.contains("codex") { return .codex }
-        if lower.contains("claude") { return .claude }
-        return nil
-    }
+    /// Pure classifier — decides whether a process is a Claude Code / Codex CLI from its short name
+    /// (`pbi_name`), resolved executable path, and argv. Kept `internal` + pure so the tricky
+    /// real-world shapes are unit-tested WITHOUT spawning processes:
+    ///  - Claude Code renames its own process to its VERSION ("2.1.204"), so `pbi_name` is useless
+    ///    for a modern Claude install — it's recognised by its executable path
+    ///    (`~/.local/share/claude/versions/<ver>`) or its `argv[0]` ("claude").
+    ///  - Codex ships a native binary self-named "codex" / "codex-aarch64-apple-darwin".
+    ///  - Either can run hosted by node/bun/deno (argv[0] = the runtime, the CLI is argv[1]).
+    ///
+    /// PRECISION is the whole point: an unrelated process that merely MENTIONS "codex"/"claude"
+    /// somewhere in its argv or environment (an MCP server, a project folder named "claude-work")
+    /// must NOT be misclassified — otherwise it becomes a phantom idle session row. So every rule
+    /// keys off a strong, positional signal (exact name, a real `/claude/` path component, argv[0],
+    /// or the script arg of a known runtime) — never a blanket substring scan of all of argv.
+    static func provider(name: String, executablePath: String, arguments: [String]) -> Provider? {
+        let shortName = name.lowercased()
+        // 1) Exact process name. Codex self-names "codex[-arch]"; "claude" covers older installs
+        //    and the test fixtures (a modern Claude renames itself to its version — caught below).
+        if shortName == "codex" || shortName.hasPrefix("codex-") { return .codex }
+        if shortName == "claude" { return .claude }
 
-    private static func provider(matchingAny args: [String]) -> Provider? {
-        for arg in args {
-            if let provider = provider(matching: arg) { return provider }
+        // 2) Executable path with a REAL path component (not a loose substring): Claude lives at
+        //    `…/claude/versions/<ver>`; a folder merely named "claude-501" won't match "/claude/".
+        let path = executablePath.lowercased()
+        let executableBase = (executablePath as NSString).lastPathComponent.lowercased()
+        if executableBase == "codex" || executableBase.hasPrefix("codex-") || path.contains("/codex/") { return .codex }
+        if path.contains("/claude/") || path.contains("/.claude/") { return .claude }
+
+        // 3) argv[0] basename — the exact CLI invocation (native install: argv0 = "claude"/"codex").
+        let argv0 = (arguments.first.map { ($0 as NSString).lastPathComponent } ?? "").lowercased()
+        if argv0 == "codex" || argv0.hasPrefix("codex-") { return .codex }
+        if argv0 == "claude" { return .claude }
+
+        // 4) node/bun/deno-hosted CLI: inspect ONLY the script argument (argv[1]) — NOT env or the
+        //    rest of argv, which is where stray "codex"/"claude" substrings live.
+        if isScriptHost(argv0) || isScriptHost(shortName), arguments.count >= 2 {
+            let script = arguments[1].lowercased()
+            if script.contains("codex") { return .codex }
+            if script.contains("claude-code") || script.contains("@anthropic-ai/claude") || script.contains("/claude/") { return .claude }
         }
         return nil
     }
