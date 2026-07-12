@@ -169,16 +169,73 @@ final class SessionStoreTests: XCTestCase {
 
         let store = SessionStore(
             scanner: SessionScanner(directoryURL: tempDirectory),
-            pollInterval: 0.05,
             discoverProcesses: { [] },
             codexSessionScanner: isolatedCodexSessionScanner
         )
         store.start()
-        // Give the poll loop a couple of cycles to run.
         try await Task.sleep(nanoseconds: 300_000_000)
         store.stop()
 
         XCTAssertTrue(store.sessions.contains { $0.id == "s1" }, "own test-process pid is genuinely alive, so this row must survive the join")
+    }
+
+    /// The whole point of the event-driven rewrite: a hook writing a file must reach the UI on its
+    /// own, with NO polling. `reconcileInterval` is set to an hour here, so if the directory watcher
+    /// doesn't fire, nothing else will save this test — it just times out and fails.
+    @MainActor
+    func testNewSessionFile_reachesTheUI_withoutAnyPolling() async throws {
+        let store = SessionStore(
+            scanner: SessionScanner(directoryURL: tempDirectory),
+            reconcileInterval: 3600, // the safety net must NOT be what makes this pass
+            discoverProcesses: { [] },
+            codexSessionScanner: isolatedCodexSessionScanner
+        )
+        store.start()
+        defer { store.stop() }
+        XCTAssertTrue(store.sessions.isEmpty, "nothing on disk yet")
+
+        // A hook fires: a brand-new session appears in the watched directory.
+        try #"{"state":"permission","provider":"claude","sessionId":"asks","pid":\#(ProcessInfo.processInfo.processIdentifier)}"#
+            .write(to: tempDirectory.appendingPathComponent("asks.json"), atomically: true, encoding: .utf8)
+
+        let appeared = try await waitUntil(timeout: 5) { store.sessions.contains { $0.id == "asks" } }
+        XCTAssertTrue(appeared, "the directory watcher must deliver the new session without a poll loop")
+        XCTAssertTrue(store.sessions.contains { $0.id == "asks" && $0.state == .permission })
+    }
+
+    /// And the reverse: the hook DELETES the file when a session ends.
+    @MainActor
+    func testDeletedSessionFile_removesTheRow_withoutAnyPolling() async throws {
+        let file = tempDirectory.appendingPathComponent("bye.json")
+        try #"{"state":"idle","provider":"claude","sessionId":"bye","pid":\#(ProcessInfo.processInfo.processIdentifier)}"#
+            .write(to: file, atomically: true, encoding: .utf8)
+
+        let store = SessionStore(
+            scanner: SessionScanner(directoryURL: tempDirectory),
+            reconcileInterval: 3600,
+            discoverProcesses: { [] },
+            codexSessionScanner: isolatedCodexSessionScanner
+        )
+        store.start()
+        defer { store.stop() }
+        XCTAssertEqual(store.sessions.map(\.id), ["bye"])
+
+        try FileManager.default.removeItem(at: file)
+
+        let gone = try await waitUntil(timeout: 5) { store.sessions.isEmpty }
+        XCTAssertTrue(gone, "the row must disappear as soon as the file does")
+    }
+
+    /// Polls a condition until it holds or the timeout expires. Used only to await ASYNCHRONOUS
+    /// file-system events — the code under test does no polling of its own.
+    @MainActor
+    private func waitUntil(timeout: TimeInterval, _ condition: () -> Bool) async throws -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() { return true }
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+        return condition()
     }
 
     // MARK: - Codex naming from rollout transcripts (Hito 2 Ronda B)

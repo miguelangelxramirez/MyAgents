@@ -10,7 +10,9 @@ import os
 /// corrupt or truncated file is skipped and logged, and every other file in the batch still
 /// comes back. `scanSessions()` never throws.
 public struct SessionScanner: Sendable {
-    private let directoryURL: URL
+    /// Public so `SessionStore` can put a `DirectoryWatcher` on exactly the directory this scanner
+    /// reads — the watcher and the scan must never disagree about which path they're about.
+    public let directoryURL: URL
     // `FileManager` isn't `Sendable` in the SDK, but Apple documents instances as safe to use
     // from multiple threads for the read-only operations this scanner performs.
     nonisolated(unsafe) private let fileManager: FileManager

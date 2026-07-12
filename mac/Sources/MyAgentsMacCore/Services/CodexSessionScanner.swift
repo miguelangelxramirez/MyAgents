@@ -67,7 +67,8 @@ public final class CodexSessionScanner: @unchecked Sendable {
     /// the C# reference's `Tail(file, 16384)`.
     private static let stateTailBytes = 16384
 
-    private let sessionsRoot: URL
+    /// Public so `SessionStore` can put a `FileTreeWatcher` on exactly the tree this scanner reads.
+    public let sessionsRoot: URL
     // `FileManager` isn't `Sendable` in the SDK, but Apple documents instances as safe to use
     // from multiple threads for the read-only operations this scanner performs (same rationale
     // `SessionScanner` and `CodexUsageService` already rely on).
