@@ -74,7 +74,7 @@ final class DesignTokensTests: XCTestCase {
         // provider color (README: "the left accent bar is the provider colour").
         XCTAssertNotEqual(
             components(of: DesignTokens.Colors.claudeOrange, appearance: aqua),
-            components(of: DesignTokens.Colors.codexTeal, appearance: aqua)
+            components(of: DesignTokens.Colors.codexBlue, appearance: aqua)
         )
     }
 
@@ -95,5 +95,53 @@ final class DesignTokensTests: XCTestCase {
         XCTAssertNotEqual(DesignTokens.Typography.title, DesignTokens.Typography.body)
         XCTAssertNotEqual(DesignTokens.Typography.body, DesignTokens.Typography.caption)
         XCTAssertNotEqual(DesignTokens.Typography.title, DesignTokens.Typography.caption)
+    }
+
+    // MARK: - SessionGridLayout: the "≤3 → one row, 4–6 → two rows, >6 → scroll" product rule
+
+    private let columns = DesignTokens.Metrics.sessionGridColumns   // 3
+    private let maxRows = DesignTokens.Metrics.sessionMaxVisibleRows // 2
+
+    func testVisibleRows_threeOrFewerSessions_isExactlyOneRow() {
+        // Miguel's rule: up to a full row (3 tiles) collapses the viewport to a single row.
+        for count in 0...3 {
+            XCTAssertEqual(
+                SessionGridLayout.visibleRows(sessionCount: count, columns: columns, maxRows: maxRows), 1,
+                "\(count) sessions must show one row, not a tall half-empty viewport"
+            )
+        }
+    }
+
+    func testVisibleRows_fourToSixSessions_isTwoRows() {
+        for count in 4...6 {
+            XCTAssertEqual(
+                SessionGridLayout.visibleRows(sessionCount: count, columns: columns, maxRows: maxRows), 2,
+                "\(count) sessions spill into a second row"
+            )
+        }
+    }
+
+    func testVisibleRows_moreThanTwoRows_capsAtMaxAndScrolls() {
+        // Seven sessions want three rows (ceil(7/3)) but the viewport caps at two — the rest scroll.
+        XCTAssertEqual(SessionGridLayout.visibleRows(sessionCount: 7, columns: columns, maxRows: maxRows), 2)
+        XCTAssertEqual(SessionGridLayout.visibleRows(sessionCount: 99, columns: columns, maxRows: maxRows), 2)
+    }
+
+    func testVisibleRows_degenerateInputs_neverCollapseBelowOne() {
+        // Zero columns / zero max would divide-by-zero or vanish the list; the floor is one row.
+        XCTAssertEqual(SessionGridLayout.visibleRows(sessionCount: 5, columns: 0, maxRows: maxRows), 1)
+        XCTAssertEqual(SessionGridLayout.visibleRows(sessionCount: 5, columns: columns, maxRows: 0), 1)
+    }
+
+    func testViewportHeight_isAWholeNumberOfRows_noPartialRowEverPeeks() {
+        // The exact height for N rows must equal N tiles + (N-1) gaps + top/bottom padding — the
+        // property that guarantees a half-cut row (the reported bug) is impossible.
+        let tile: CGFloat = 78, gap: CGFloat = 8, pad: CGFloat = 8
+        let oneRow = SessionGridLayout.viewportHeight(rows: 1, tileHeight: tile, rowGap: gap, verticalPadding: pad)
+        let twoRows = SessionGridLayout.viewportHeight(rows: 2, tileHeight: tile, rowGap: gap, verticalPadding: pad)
+        XCTAssertEqual(oneRow, 78 + 16)                 // 1·78 + 0·8 + 2·8
+        XCTAssertEqual(twoRows, 2 * 78 + 8 + 16)        // 2·78 + 1·8 + 2·8
+        // Two rows must be exactly one tile + one gap taller than one row — never a fractional sliver.
+        XCTAssertEqual(twoRows - oneRow, tile + gap)
     }
 }

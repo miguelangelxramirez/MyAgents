@@ -13,6 +13,12 @@ struct PopoverRootView: View {
     /// Opens a session: clears its pending dot and focuses its terminal (see `AppDelegate.activate`).
     let onActivateSession: (Session) -> Void
 
+    /// `true` when this view is hosted in the torn-off floating window rather than the menu-bar
+    /// popover — flips the header's anchored/detached affordance (shows the "return" button).
+    var isDetached: Bool = false
+    /// Re-anchors the window back to the menu bar (closes the floating window). No-op in the popover.
+    var onReturnToMenuBar: () -> Void = {}
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
@@ -40,10 +46,25 @@ struct PopoverRootView: View {
                 .font(DesignTokens.Typography.title)
                 .foregroundStyle(DesignTokens.Colors.foreground)
             Spacer()
+            if isDetached {
+                returnToMenuBarButton
+            }
             SettingsMenu(preferences: preferences, model: model)
         }
         .padding(.horizontal, DesignTokens.Spacing.s)
         .padding(.vertical, DesignTokens.Spacing.xs)
+    }
+
+    /// Only in the torn-off window: sends the floating panel back to the menu bar. The inward
+    /// "collapse" arrows read as "put it away" — the counterpart to the drag-out that detached it.
+    private var returnToMenuBarButton: some View {
+        Button(action: onReturnToMenuBar) {
+            Image(systemName: "arrow.down.right.and.arrow.up.left")
+                .foregroundStyle(DesignTokens.Colors.secondaryForeground)
+        }
+        .buttonStyle(.plain)
+        .help(String(localized: "menu.return-to-menubar", defaultValue: "Return to the menu bar"))
+        .accessibilityLabel(String(localized: "menu.return-to-menubar", defaultValue: "Return to the menu bar"))
     }
 
     private func transientBanner(_ message: String) -> some View {
@@ -73,30 +94,57 @@ struct PopoverRootView: View {
         }
     }
 
+    /// Three flexible columns, evenly gapped — the sessions read as a grid of compact cards
+    /// (`SessionTileView`) instead of a tall vertical list (feedback 2026-07-11: "de 3 en 3").
+    private var gridColumns: [GridItem] {
+        Array(
+            repeating: GridItem(.flexible(), spacing: DesignTokens.Spacing.xs),
+            count: DesignTokens.Metrics.sessionGridColumns
+        )
+    }
+
+    /// The scroll viewport's exact height for the current session count: one row for ≤3 sessions,
+    /// two full rows for more, and scroll-in-place past two rows — always a whole number of rows so
+    /// no half-cut row ever peeks (`SessionGridLayout`, tested). Includes the grid's own vertical
+    /// padding so the visible content lines up flush with the frame.
+    private var sessionListHeight: CGFloat {
+        let rows = SessionGridLayout.visibleRows(
+            sessionCount: sessionStore.sessions.count,
+            columns: DesignTokens.Metrics.sessionGridColumns,
+            maxRows: DesignTokens.Metrics.sessionMaxVisibleRows
+        )
+        return SessionGridLayout.viewportHeight(
+            rows: rows,
+            tileHeight: DesignTokens.Metrics.sessionTileHeight,
+            rowGap: DesignTokens.Spacing.xs,
+            verticalPadding: DesignTokens.Spacing.xs
+        )
+    }
+
     @ViewBuilder
     private var sessionList: some View {
         if sessionStore.sessions.isEmpty {
             emptyState
         } else {
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: DesignTokens.Spacing.xxs) {
+                LazyVGrid(columns: gridColumns, spacing: DesignTokens.Spacing.xs) {
                     ForEach(sessionStore.sessions) { session in
-                        SessionRowView(session: session) { onActivateSession(session) }
+                        SessionTileView(session: session) { onActivateSession(session) }
                     }
                 }
-                .padding(.horizontal, DesignTokens.Spacing.xs)
+                .padding(.horizontal, DesignTokens.Spacing.s)
                 .padding(.vertical, DesignTokens.Spacing.xs)
                 // Fix 2 (live user feedback, 2026-07-09): pin the content to the popover's own
                 // width instead of letting the ScrollView infer it from the available space. Left
                 // to infer, the inferred width changes by the scrollbar's width the instant a
                 // vertical scroll indicator appears/disappears (System Settings → "Show scroll
                 // bars: Always" reserves real layout space, not just an overlay), which reads as
-                // the whole list shifting sideways. A fixed width removes that dependency
+                // the whole grid shifting sideways. A fixed width removes that dependency
                 // entirely — the scrollbar can only overlay on top, never reflow the content.
                 .frame(width: DesignTokens.Metrics.popoverWidth, alignment: .leading)
             }
             .scrollIndicators(.automatic)
-            .frame(maxHeight: DesignTokens.Metrics.popoverMaxListHeight)
+            .frame(height: sessionListHeight)
         }
     }
 
@@ -125,6 +173,9 @@ private struct SettingsMenu: View {
             hookItems
             Divider()
             Toggle(String(localized: "menu.show-usage", defaultValue: "Show usage"), isOn: $preferences.showUsage)
+            if preferences.showUsage {
+                menuBarMetricPicker
+            }
             Toggle(String(localized: "menu.start-at-login", defaultValue: "Open at login"), isOn: startAtLoginBinding)
             Divider()
             Button(String(localized: "menu.about", defaultValue: "About MyAgents")) { model.showAbout() }
@@ -151,6 +202,32 @@ private struct SettingsMenu: View {
             Button(String(localized: "menu.hooks.repair", defaultValue: "Repair tracking")) { model.repairHooks() }
             Button(String(localized: "menu.hooks.remove", defaultValue: "Remove tracking")) { model.removeHooks() }
         }
+    }
+
+    /// Which single percentage the menu-bar glyph shows (Claude/Codex × 5h/7d). A SwiftUI `Picker`
+    /// in a `Menu` renders as a native submenu with a checkmark on the selection. Only shown while
+    /// "Show usage" is on (an inert picker for a hidden badge would just be noise).
+    private var menuBarMetricPicker: some View {
+        Picker(
+            String(localized: "menu.usage-metric", defaultValue: "Menu bar shows"),
+            selection: $preferences.menuBarUsageMetric
+        ) {
+            ForEach(MenuBarUsageMetric.allCases, id: \.self) { metric in
+                Text(Self.label(for: metric)).tag(metric)
+            }
+        }
+    }
+
+    /// "Claude · 5 h" etc. Provider names are brands (kept as-is); the window reuses the same
+    /// localized "5 h"/"7 d" strings the popover's usage rows use.
+    private static func label(for metric: MenuBarUsageMetric) -> String {
+        let provider = metric.provider == .codex
+            ? String(localized: "usage.codex", defaultValue: "Codex")
+            : String(localized: "usage.claude", defaultValue: "Claude")
+        let window = metric.window == .fiveHour
+            ? String(localized: "usage.window.5h", defaultValue: "5 h")
+            : String(localized: "usage.window.7d", defaultValue: "7 d")
+        return "\(provider) · \(window)"
     }
 
     private var startAtLoginBinding: Binding<Bool> {

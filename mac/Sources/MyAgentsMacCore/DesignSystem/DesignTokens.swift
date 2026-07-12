@@ -17,8 +17,10 @@ public enum DesignTokens {
         /// Windows `ProviderClaude`/`Busy` = RGB(217,119,87) = #D97757.
         public static let claudeOrange = Color(red: 217/255, green: 119/255, blue: 87/255)
 
-        /// OpenAI Codex accent — Windows `ProviderCodex` = RGB(64,196,180) = #40C4B4.
-        public static let codexTeal = Color(red: 64/255, green: 196/255, blue: 180/255)
+        /// OpenAI Codex accent. Intentionally DIVERGES from the Windows product's teal
+        /// (`ProviderCodex` = #40C4B4) — on macOS Miguel wanted a bright sky-blue so Codex reads as
+        /// unmistakably "blue" next to Claude's orange (live user feedback, 2026-07-09). #3B9EFF.
+        public static let codexBlue = Color(red: 59/255, green: 158/255, blue: 255/255)
 
         /// Awaiting-permission accent (attention). Windows `Permission` = RGB(235,190,70) = #EBBE46.
         public static let permission = Color(red: 235/255, green: 190/255, blue: 70/255)
@@ -114,13 +116,28 @@ public enum DesignTokens {
     /// Fixed pixel metrics that aren't spacing (bar widths/heights, dot sizes, the popover width).
     /// Kept out of `Spacing` because they're not on the 8pt gap grid — they're component sizes.
     public enum Metrics {
-        /// Popover content width. Roomy enough for a folder path + state without wrapping, narrow
-        /// enough to feel like a menu, not a window. Bumped 300 → 340 (live user feedback, Fix 3)
-        /// for more breathing room around the top usage summary line and longer folder paths.
-        public static let popoverWidth: CGFloat = 340
-        /// Left provider accent bar.
+        /// Popover content width. Bumped 340 → 400 (live user feedback, 2026-07-09) so the session
+        /// tiles read as a grid of cards, not a tall vertical list ("un poco más ancho y menos
+        /// largo").
+        public static let popoverWidth: CGFloat = 400
+        /// Left provider accent bar (session tile / usage).
         public static let accentBarWidth: CGFloat = 3
         public static let accentBarHeight: CGFloat = 34
+
+        /// Session grid: THREE tiles per row (feedback 2026-07-11: "muéstralas de 3 en 3"). The
+        /// narrower tile is defended by a lower `minimumScaleFactor` on the state label
+        /// (`SessionTileView`), so "Awaiting permission" / "Esperando permiso" still shrinks-to-fit
+        /// rather than truncating — the "que no se corte" guarantee survives the extra column.
+        public static let sessionGridColumns: Int = 3
+        /// A single session tile's height. Compact: three tight text lines (name · folder · state)
+        /// plus padding — lower than the old square so the tiles read "más compacto" while the
+        /// extra width does the work of fitting the folder + state text.
+        public static let sessionTileHeight: CGFloat = 78
+        /// The viewport never grows past this many tile rows — beyond it, the grid scrolls in place.
+        /// Two (feedback 2026-07-11): ≤3 sessions show one row, 4–6 show two full rows, >6 keep two
+        /// rows and scroll. The height is computed exactly (`SessionGridLayout.viewportHeight`) so a
+        /// half-cut row never peeks — the bug Miguel reported ("la tercera fila se ve a la mitad").
+        public static let sessionMaxVisibleRows: Int = 2
         /// Usage progress bar.
         public static let usageBarHeight: CGFloat = 5
         /// Pending / activity dot.
@@ -129,13 +146,40 @@ public enum DesignTokens {
         public static let glyphPointSize: CGFloat = 15
         /// Font size of the composed "% badge" text drawn next to the menu-bar glyph.
         public static let glyphBadgeFontSize: CGFloat = 9
-        /// Max height of the scrolling session list before it scrolls instead of growing.
-        public static let popoverMaxListHeight: CGFloat = 320
         /// Fixed columns in a usage row so bars line up across providers.
         public static let usageLabelWidth: CGFloat = 24
         public static let usageValueWidth: CGFloat = 36
+        /// Trailing "resets in …" countdown column in a usage row (e.g. "2h 14m", "6d 3h").
+        public static let usageResetWidth: CGFloat = 54
         /// Decorative SF Symbol sizes for the onboarding hero and the empty-state illustration.
         public static let heroGlyphPointSize: CGFloat = 26
         public static let emptyGlyphPointSize: CGFloat = 22
+    }
+}
+
+/// Pure layout math for the session grid — how many rows to actually SHOW, and the exact pixel
+/// height that many rows occupy. A product rule Miguel pinned by feel (feedback 2026-07-11):
+/// ≤3 sessions show ONE row; 4–6 show two full rows; >6 keep two rows and scroll. Kept pure and
+/// tested so the "no half-cut row" guarantee (the reported bug) can't silently rot as tokens move.
+public enum SessionGridLayout {
+    /// Rows to render in the viewport: `ceil(sessionCount / columns)`, clamped to `[1, maxRows]`.
+    /// One row is the floor even at zero sessions so the (empty-guarded) frame never collapses.
+    public static func visibleRows(sessionCount: Int, columns: Int, maxRows: Int) -> Int {
+        guard sessionCount > 0, columns > 0 else { return 1 }
+        let needed = (sessionCount + columns - 1) / columns   // ceil without floating point
+        return min(max(needed, 1), max(maxRows, 1))
+    }
+
+    /// Exact viewport height for `rows` tiles of `tileHeight`, with `rowGap` between them and
+    /// `verticalPadding` above and below. A clean multiple of the row height — the grid can only
+    /// show whole rows, so a partial row can never peek at the bottom edge.
+    public static func viewportHeight(
+        rows: Int,
+        tileHeight: CGFloat,
+        rowGap: CGFloat,
+        verticalPadding: CGFloat
+    ) -> CGFloat {
+        let rows = CGFloat(max(rows, 1))
+        return rows * tileHeight + (rows - 1) * rowGap + 2 * verticalPadding
     }
 }

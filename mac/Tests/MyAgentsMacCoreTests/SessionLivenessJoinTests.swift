@@ -91,6 +91,77 @@ final class SessionLivenessJoinTests: XCTestCase {
         XCTAssertEqual(result.count, 1, "the live process must not ALSO produce a duplicate discovered row")
     }
 
+    // MARK: - Per-folder collapse of pid-less duplicates (the macOS "ghost permission" fix)
+
+    private func date(_ unix: TimeInterval) -> Date { Date(timeIntervalSince1970: unix) }
+
+    func testPidLessDuplicatesInOneFolder_collapseToTheNewest() {
+        // The exact macOS shape: three orphan files for the same folder (pid:0 → nil), one live
+        // process there. Before the fix all three showed; now only the freshest survives.
+        let cwd = "/Users/me/TravelApp"
+        let old = Session(id: "old", cwd: cwd, provider: .claude, state: .permission, updatedAt: date(100), ownerPid: nil)
+        let mid = Session(id: "mid", cwd: cwd, provider: .claude, state: .idle, updatedAt: date(200), ownerPid: nil)
+        let live = Session(id: "live", cwd: cwd, provider: .claude, state: .thinking, updatedAt: date(300), ownerPid: nil)
+        let processes = [process(pid: 42, provider: .claude, cwd: cwd)]
+
+        let result = SessionLivenessJoin.join(sessions: [old, mid, live], liveProcesses: processes, isAlive: { _ in false })
+
+        XCTAssertEqual(result.map(\.id), ["live"], "only the newest file for the folder survives — the stale ghosts are dropped")
+    }
+
+    func testCollapse_dropsAFrozenPermissionGhostBehindALiveSession() {
+        // Regression for the reported bug: a dead sibling frozen on `.permission` must not surface
+        // when the folder's live session is calm.
+        let cwd = "/Users/me/proj"
+        let ghost = Session(id: "ghost", cwd: cwd, provider: .claude, state: .permission, updatedAt: date(10), ownerPid: nil)
+        let liveIdle = Session(id: "liveIdle", cwd: cwd, provider: .claude, state: .idle, updatedAt: date(999), ownerPid: nil)
+        let processes = [process(pid: 7, provider: .claude, cwd: cwd)]
+
+        let result = SessionLivenessJoin.join(sessions: [ghost, liveIdle], liveProcesses: processes, isAlive: { _ in false })
+
+        XCTAssertEqual(result.map(\.id), ["liveIdle"])
+        XCTAssertFalse(result.contains { $0.needsAttention }, "no phantom 'Awaiting permission' row must remain")
+    }
+
+    func testCollapse_keepsDistinctFoldersAndDistinctProviders() {
+        // Same folder but different providers is NOT a duplicate; different folders are never merged.
+        let a = Session(id: "a", cwd: "/proj-a", provider: .claude, updatedAt: date(1), ownerPid: nil)
+        let b = Session(id: "b", cwd: "/proj-b", provider: .claude, updatedAt: date(1), ownerPid: nil)
+        let c = Session(id: "c", cwd: "/proj-a", provider: .codex, updatedAt: date(1), ownerPid: nil)
+        let processes = [
+            process(pid: 1, provider: .claude, cwd: "/proj-a"),
+            process(pid: 2, provider: .claude, cwd: "/proj-b"),
+            process(pid: 3, provider: .codex, cwd: "/proj-a"),
+        ]
+
+        let result = SessionLivenessJoin.join(sessions: [a, b, c], liveProcesses: processes, isAlive: { _ in false })
+
+        XCTAssertEqual(Set(result.map(\.id)), ["a", "b", "c"], "only same provider+cwd collapses")
+    }
+
+    func testCollapse_pidFulDuplicatesInOneFolder_areBothKept() {
+        // On a platform that DOES record pids, two real sessions in one folder are distinguishable
+        // and must both stay — the collapse only touches the pid-less (macOS) rows.
+        let s1 = Session(id: "s1", cwd: "/proj", provider: .claude, updatedAt: date(1), ownerPid: 10)
+        let s2 = Session(id: "s2", cwd: "/proj", provider: .claude, updatedAt: date(2), ownerPid: 11)
+
+        let result = SessionLivenessJoin.join(sessions: [s1, s2], liveProcesses: [], isAlive: { $0 == 10 || $0 == 11 })
+
+        XCTAssertEqual(Set(result.map(\.id)), ["s1", "s2"])
+    }
+
+    func testCollapse_missingTimestampLosesToARecordedOne() {
+        // A file with no `ts` (updatedAt nil) must never win over one that has a timestamp.
+        let cwd = "/proj"
+        let noTs = Session(id: "noTs", cwd: cwd, provider: .claude, state: .permission, updatedAt: nil, ownerPid: nil)
+        let withTs = Session(id: "withTs", cwd: cwd, provider: .claude, state: .idle, updatedAt: date(5), ownerPid: nil)
+        let processes = [process(pid: 1, provider: .claude, cwd: cwd)]
+
+        let result = SessionLivenessJoin.join(sessions: [noTs, withTs], liveProcesses: processes, isAlive: { _ in false })
+
+        XCTAssertEqual(result.map(\.id), ["withTs"], "a timestamped session beats a timestamp-less one regardless of input order")
+    }
+
     func testHostileMix_deadRemoved_aliveKept_unmatchedDiscovered() {
         let aliveByPid = Session(id: "alive-pid", provider: .claude, ownerPid: 1)
         let deadByPid = Session(id: "dead-pid", provider: .claude, ownerPid: 2)

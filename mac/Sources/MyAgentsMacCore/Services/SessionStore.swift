@@ -27,6 +27,16 @@ public final class SessionStore: ObservableObject {
     private let codexSessionScanner: CodexSessionScanner
     private let pollInterval: TimeInterval
     private var pollTask: Task<Void, Never>?
+    /// Counts polls so the stale-file reap runs on the first poll and then only occasionally (it's
+    /// disk hygiene, not per-frame work — see `reapEveryPolls`).
+    private var pollCount = 0
+    /// Reap once every this many polls. At the default 0.5s interval that's ~every 60s — often
+    /// enough to keep `sessions.d/` from accumulating orphans, rare enough to be negligible I/O.
+    private let reapEveryPolls = 120
+    /// A session file untouched for longer than this is considered abandoned and reaped. Generous
+    /// on purpose: the per-folder dedup already hides ghosts from the live list, so this only has to
+    /// stop the directory growing — 24h never reaps a session you're realistically still in.
+    private let staleFileThreshold: TimeInterval = 24 * 60 * 60
     /// In-memory "finished-but-unopened" state, folded into every published list. Owned here (not
     /// in the scanner) because it's derived from what the app watched happen across polls, not from
     /// disk. See `PendingTracker`.
@@ -91,7 +101,13 @@ public final class SessionStore: ObservableObject {
         let discoverProcesses = self.discoverProcesses
         let transcriptTitle = self.transcriptTitle
         let codexSessionScanner = self.codexSessionScanner
+        let shouldReap = pollCount % reapEveryPolls == 0
+        let staleFileThreshold = self.staleFileThreshold
+        pollCount += 1
         let (scanned, processes) = await Task.detached {
+            // Disk hygiene, off-main: drop long-abandoned orphan files before this poll's scan so
+            // they neither reach the join nor keep piling up (see `SessionScanner.reapStaleFiles`).
+            if shouldReap { scanner.reapStaleFiles(olderThan: staleFileThreshold) }
             // Off-main: reads Codex's rollout files to (re)populate the name/state caches BEFORE
             // resolving display names below, so both the hook-based path here and the
             // discovered-row path in `apply()` see this poll's data.

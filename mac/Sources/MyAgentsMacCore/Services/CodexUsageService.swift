@@ -53,12 +53,22 @@ public struct CodexUsageService: Sendable {
     }
 
     public func fetch() async -> UsageInfo {
+        // Observability (user feedback, 2026-07-09: "el usage de codex no se actualiza"). Unlike
+        // Claude (a local file read), Codex has to spawn `codex app-server` and talk JSON-RPC —
+        // which works from a shell but can fail or time out when the app is launched by launchd
+        // (no interactive PATH). These `.notice` lines make WHICH path won visible in `log show`,
+        // so a frozen/greyed Codex reading is diagnosable instead of silent. Percentages aren't
+        // sensitive, so they're logged `.public`.
         if let live = await fetchFromAppServerRPC() {
+            logger.notice("codex usage: live RPC ok (5h=\(live.fiveHourPercent ?? -1, privacy: .public), 7d=\(live.sevenDayPercent ?? -1, privacy: .public))")
             return live
         }
+        logger.notice("codex usage: live RPC unavailable — falling back to rollout file (stale)")
         if let rollout = fetchFromRollout() {
+            logger.notice("codex usage: using rollout fallback (5h=\(rollout.fiveHourPercent ?? -1, privacy: .public), 7d=\(rollout.sevenDayPercent ?? -1, privacy: .public))")
             return rollout
         }
+        logger.notice("codex usage: no data — RPC and rollout both failed, reporting unknown")
         return .unknown(provider: .codex)
     }
 
@@ -119,9 +129,17 @@ public struct CodexUsageService: Sendable {
                 inputHandle.write(data)
             }
         }
-        try? inputHandle.close()
 
+        // Do NOT close stdin here. `codex app-server` treats a stdin EOF as "the client is done"
+        // and shuts down — if we close right after writing, it exits after answering only
+        // `initialize` and NEVER replies to `account/rateLimits/read` (id:2). That was the real
+        // reason Codex usage "no se actualizaba": every live fetch silently lost the race and fell
+        // through to the greyed rollout fallback (root-caused live on this machine, 2026-07-09 —
+        // keeping stdin open for the same request returns the data, closing it immediately doesn't).
+        // Keep the write end open until we've read the response; the kill-switch timer and the
+        // `defer` above still guarantee the process is torn down no matter what.
         let matchedLine = readLine(containing: "\"id\":2", from: stdoutPipe.fileHandleForReading)
+        try? inputHandle.close()
         process.terminate()
         process.waitUntilExit()
 

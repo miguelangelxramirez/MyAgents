@@ -37,4 +37,47 @@ final class UsageDisplayTests: XCTestCase {
         let now = Date()
         XCTAssertEqual(UsageAge.minutes(since: now.addingTimeInterval(30), now: now), 0)
     }
+
+    // MARK: - MenuBarUsageMetric: the chosen menu-bar percentage maps to the right provider/window
+
+    private var claudeInfo: UsageInfo {
+        UsageInfo(provider: .claude, fiveHourPercent: 11, sevenDayPercent: 22, isStale: false)
+    }
+    private var codexInfo: UsageInfo {
+        UsageInfo(provider: .codex, fiveHourPercent: 33, sevenDayPercent: 44, isStale: true)
+    }
+
+    func testMetric_readsTheCorrectProviderAndWindow() {
+        // Each of the four options must pull the value from its own provider AND its own window —
+        // swap the provider (claude/codex info) or the window (5h/7d field) and this fails.
+        XCTAssertEqual(MenuBarUsageMetric.claudeFiveHour.reading(claude: claudeInfo, codex: codexInfo).percent, 11)
+        XCTAssertEqual(MenuBarUsageMetric.claudeSevenDay.reading(claude: claudeInfo, codex: codexInfo).percent, 22)
+        XCTAssertEqual(MenuBarUsageMetric.codexFiveHour.reading(claude: claudeInfo, codex: codexInfo).percent, 33)
+        XCTAssertEqual(MenuBarUsageMetric.codexSevenDay.reading(claude: claudeInfo, codex: codexInfo).percent, 44)
+    }
+
+    func testMetric_carriesTheChosenProvidersStaleness() {
+        XCTAssertFalse(MenuBarUsageMetric.claudeFiveHour.reading(claude: claudeInfo, codex: codexInfo).isStale)
+        XCTAssertTrue(MenuBarUsageMetric.codexFiveHour.reading(claude: claudeInfo, codex: codexInfo).isStale,
+                      "a codex metric must reflect codex's staleness, not claude's")
+    }
+
+    func testMetric_unknownWindow_isNilNotZero() {
+        let noSevenDay = UsageInfo(provider: .claude, fiveHourPercent: 5, sevenDayPercent: nil)
+        XCTAssertNil(MenuBarUsageMetric.claudeSevenDay.reading(claude: noSevenDay, codex: codexInfo).percent,
+                     "an unknown window must stay nil (UI shows '—'), never a fabricated 0%")
+    }
+
+    func testMetric_providerMapping() {
+        XCTAssertEqual(MenuBarUsageMetric.claudeSevenDay.provider, .claude)
+        XCTAssertEqual(MenuBarUsageMetric.codexFiveHour.provider, .codex)
+    }
+
+    func testMetric_rawValuesRoundTrip_forPersistence() {
+        // AppPreferences persists the rawValue; a rename would silently reset users to the default.
+        for metric in MenuBarUsageMetric.allCases {
+            XCTAssertEqual(MenuBarUsageMetric(rawValue: metric.rawValue), metric)
+        }
+        XCTAssertNil(MenuBarUsageMetric(rawValue: "garbage"))
+    }
 }

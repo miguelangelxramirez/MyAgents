@@ -48,7 +48,11 @@ public struct MenuBarStatus: Equatable, Sendable {
     /// busy. Idle and (deliberately) attention are static.
     public var shouldAnimate: Bool { kind == .busy }
 
-    /// SF Symbol name for the current state.
+    /// SF Symbol name for the current state. Today only `.attention` actually reaches an SF Symbol
+    /// in the renderer (the warning triangle) — `MenuBarGlyphController` draws its own robot-head
+    /// mark for `.idle`/`.busy` (app identity, Miguel's ask 2026-07-09). The idle/busy names are
+    /// kept as a documented fallback so the glyph still has a sensible symbol if the custom
+    /// renderer is ever bypassed.
     public var symbolName: String {
         switch kind {
         case .attention: return "exclamationmark.triangle.fill"

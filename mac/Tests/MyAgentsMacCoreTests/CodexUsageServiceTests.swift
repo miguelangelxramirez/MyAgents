@@ -69,6 +69,40 @@ final class CodexUsageServiceTests: XCTestCase {
         XCTAssertFalse(usage.isStale, "a live RPC reading must not be flagged stale")
     }
 
+    /// Regression: real `codex app-server` only answers `account/rateLimits/read` while the client
+    /// keeps stdin OPEN — a stdin EOF makes it shut down after `initialize`, so it never replies to
+    /// id:2 (root-caused live, 2026-07-09: this was why Codex usage stayed greyed/stale). This
+    /// fixture emulates exactly that: it queues the id:2 reply but cancels it the instant stdin
+    /// hits EOF. It therefore FAILS (falls back to the stale rollout) if the service closes stdin
+    /// before reading, and SUCCEEDS (live reading) only if the service keeps it open.
+    func testAppServerRPC_requiresStdinToStayOpen_untilResponseIsRead() async throws {
+        let script = try writeScript("""
+        #!/bin/sh
+        read -r l1
+        read -r l2
+        read -r l3
+        # Queue the id:2 answer, but only deliver it if the client keeps stdin open.
+        ( sleep 0.3; echo '{"jsonrpc":"2.0","id":2,"result":{"rateLimits":{"primary":{"usedPercent":7,"resetsAt":1700000000},"secondary":{"usedPercent":88,"resetsAt":1700100000}}}}' ) &
+        pending=$!
+        # Block on stdin: if the client already closed it (EOF), read returns immediately and we
+        # kill the pending answer before it fires — mirroring codex shutting down on stdin EOF.
+        if ! read -r _extra; then
+          kill "$pending" 2>/dev/null
+          exit 0
+        fi
+        wait "$pending"
+        """, named: "fake-app-server-needs-open-stdin.sh")
+        // A rollout fallback exists and is DIFFERENT, so a wrong (stale) result is unambiguous.
+        try writeRollout(#"{"payload":{"rate_limits":{"primary":{"used_percent":1,"resets_at":1700000000}}}}"#)
+
+        let service = CodexUsageService(rpcCommand: ["/bin/sh", script.path], rpcTimeout: 5, rolloutRoot: rolloutRoot)
+        let usage = await service.fetch()
+
+        XCTAssertEqual(usage.fiveHourPercent, 7, "must read the LIVE RPC value — service closed stdin too early if this is 1 (the stale rollout)")
+        XCTAssertEqual(usage.sevenDayPercent, 88)
+        XCTAssertFalse(usage.isStale, "a live RPC reading must not be flagged stale")
+    }
+
     func testAppServerRPC_malformedResponse_fallsBackRatherThanCrashing() async throws {
         let script = try writeScript("""
         #!/bin/sh

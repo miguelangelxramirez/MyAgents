@@ -278,8 +278,7 @@ public final class CodexSessionScanner: @unchecked Sendable {
     ///
     /// [ASUMIDO]: `task_started`/`task_complete`/`turn_aborted` were verified against real rollout
     /// files on this machine; no real approval-required session was available to verify the
-    /// approval-request line shape, so that branch mirrors the C# reference's heuristic
-    /// (case-insensitive "approval" + "request" substrings) unverified against a live example.
+    /// approval-request line shape — see `isApprovalRequest` for how the marker is now matched.
     private static func inferState(file: URL, ageSeconds: TimeInterval) -> (SessionActivityState, String, Date?) {
         let tailText = tail(of: file, maxBytes: stateTailBytes)
         let lines = tailText.split(separator: "\n", omittingEmptySubsequences: true)
@@ -287,8 +286,7 @@ public final class CodexSessionScanner: @unchecked Sendable {
             if line.contains("\"task_complete\"") { return (.idle, "", nil) }
             if line.contains("\"turn_aborted\"") { return (.idle, "", nil) }
             if line.contains("\"thread_rolled_back\"") { return (.idle, "", nil) }
-            if line.range(of: "approval", options: .caseInsensitive) != nil,
-               line.range(of: "request", options: .caseInsensitive) != nil {
+            if isApprovalRequest(line: line) {
                 return (.permission, String(localized: "codex.state.awaiting-approval", defaultValue: "Awaiting your approval"), nil)
             }
             if line.contains("\"task_started\"") {
@@ -299,6 +297,22 @@ public final class CodexSessionScanner: @unchecked Sendable {
             return (.tool, String(localized: "codex.state.working", defaultValue: "Working"), nil)
         }
         return (.idle, "", nil)
+    }
+
+    /// A REAL pending-approval marker, told apart from the ubiquitous `approval_policy` config and
+    /// the `request_user_input` tool. Codex serializes an approval prompt as an event whose type
+    /// ends in `approval_request` (`exec_approval_request`, `apply_patch_approval_request`), so the
+    /// two tokens must be ADJACENT.
+    ///
+    /// The old heuristic ("approval" AND "request" anywhere on the line) fired on
+    /// `"approval_policy":"on-request"` — a field present in EVERY turn context (19k+ lines in this
+    /// machine's rollouts). Because the state walk runs newest→oldest and the turn context is
+    /// written after `task_started`, that false match beat the real "working" marker and made a
+    /// merely-thinking Codex session read as "Esperando permiso" (live user feedback, 2026-07-09).
+    /// Requiring adjacency is strictly tighter than the old check, so it can only remove false
+    /// positives — it never matches `approval_policy`, `on-request`, or `request_user_input`.
+    static func isApprovalRequest<S: StringProtocol>(line: S) -> Bool {
+        line.range(of: "approval[_-]request", options: [.caseInsensitive, .regularExpression]) != nil
     }
 
     /// Parses the leading `"timestamp":"2026-07-08T16:43:26.739Z"` of a rollout line to a `Date`.

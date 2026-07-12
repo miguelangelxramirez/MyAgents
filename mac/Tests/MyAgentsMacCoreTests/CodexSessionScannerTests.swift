@@ -241,6 +241,51 @@ final class CodexSessionScannerTests: XCTestCase {
         XCTAssertEqual(session.state, .tool)
     }
 
+    func testInferState_approvalPolicyInTurnContext_isNotMistakenForPermission() throws {
+        // Regression (live user feedback, 2026-07-09): sending a message to Codex made the row read
+        // "Esperando permiso" while it was merely thinking. Codex writes an `approval_policy`
+        // config field ("on-request") into the turn context AFTER `task_started`; the old heuristic
+        // matched "approval" + "request" anywhere on a line, so that config line — newer than
+        // task_started — false-matched as a pending approval. It must stay `.tool` (working).
+        let startedLine = #"{"timestamp":"2026-07-08T16:43:26.739Z","type":"event_msg","payload":{"type":"task_started","turn_id":"t1"}}"#
+        let turnContextLine = #"{"timestamp":"2026-07-08T16:43:27.000Z","type":"turn_context","payload":{"timezone":"Europe/Madrid","approval_policy":"on-request","sandbox":"workspace"}}"#
+        try writeRollout(
+            sessionId: "policy-noise",
+            cwd: "/Users/me/policy-noise-project",
+            lines: [userMessageLine("Do the thing"), startedLine, turnContextLine]
+        )
+
+        let scanner = CodexSessionScanner(sessionsRoot: sessionsRoot)
+        let session = try XCTUnwrap(scanner.scanRecentSessions().first { $0.sessionId == "policy-noise" })
+
+        XCTAssertEqual(session.state, .tool, "an `approval_policy:on-request` config line must never read as a pending approval")
+    }
+
+    func testInferState_realApprovalRequestEvent_isPermission() throws {
+        // The genuine marker: an event whose type ends in `approval_request` (the two tokens
+        // adjacent), which `approval_policy` / `on-request` / `request_user_input` never contain.
+        let startedLine = #"{"timestamp":"2026-07-08T16:43:26.739Z","type":"event_msg","payload":{"type":"task_started","turn_id":"t1"}}"#
+        let approvalLine = #"{"timestamp":"2026-07-08T16:43:40.000Z","type":"event_msg","payload":{"type":"exec_approval_request","turn_id":"t1","command":["rm","-rf","build"]}}"#
+        try writeRollout(
+            sessionId: "needs-approval",
+            cwd: "/Users/me/needs-approval-project",
+            lines: [userMessageLine("Clean the build"), startedLine, approvalLine]
+        )
+
+        let scanner = CodexSessionScanner(sessionsRoot: sessionsRoot)
+        let session = try XCTUnwrap(scanner.scanRecentSessions().first { $0.sessionId == "needs-approval" })
+
+        XCTAssertEqual(session.state, .permission, "a real `*_approval_request` event must read as awaiting permission")
+    }
+
+    func testIsApprovalRequest_matchesRealEventTypes_rejectsPolicyNoise() {
+        XCTAssertTrue(CodexSessionScanner.isApprovalRequest(line: #""type":"exec_approval_request""#))
+        XCTAssertTrue(CodexSessionScanner.isApprovalRequest(line: #""type":"apply_patch_approval_request""#))
+        XCTAssertFalse(CodexSessionScanner.isApprovalRequest(line: #""approval_policy":"on-request""#))
+        XCTAssertFalse(CodexSessionScanner.isApprovalRequest(line: #"Use the `request_user_input` tool only when you need approval"#),
+                       "prose mentioning approval and request non-adjacently must not match")
+    }
+
     // MARK: - name(forCwd:) persists across scans; latestSession(forCwd:) does not
 
     func testNameForCwd_survivesAcrossScans_evenAfterRolloutAgesOut() throws {

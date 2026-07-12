@@ -1,17 +1,14 @@
 import AppKit
 import MyAgentsMacCore
 
-/// Claude usage to badge next to the status glyph as two tiny vertical bars (5 h · 7 d) — the
-/// compact, number-free menu-bar readout Miguel picked over a "%" string. `nil` for any bucket the
-/// statusline hasn't reported yet (drawn as an empty track, never a fabricated 0 %); `isStale`
-/// greys both bars so an old reading can't masquerade as current.
+/// The single usage percentage to badge next to the status glyph — Miguel swapped the two mini
+/// bars ("los dos puntos") for one chosen number (feedback 2026-07-09). `percent` is `nil` for a
+/// window the source hasn't reported yet (drawn as "—", never a fabricated 0 %); `isStale` greys
+/// it so an old reading can't masquerade as current; `provider` picks the accent colour.
 struct MenuBarUsage: Equatable {
-    var fiveHour: Double?
-    var sevenDay: Double?
+    var percent: Double?
+    var provider: Provider
     var isStale: Bool
-
-    /// Whether there's anything to draw at all (both buckets unknown → hide the badge entirely).
-    var hasAnyReading: Bool { fiveHour != nil || sevenDay != nil }
 }
 
 /// Draws (and, only while something is busy, animates) the status-bar glyph, plus an optional
@@ -32,13 +29,16 @@ final class MenuBarGlyphController {
     private var phase: CGFloat = 0
     private var hasRendered = false
 
-    // Mini-bar geometry (points). Two thin vertical bars sit to the right of the glyph.
-    private enum Bar {
-        static let width: CGFloat = 2.5
-        static let gap: CGFloat = 2          // between the two bars
-        static let leading: CGFloat = 4      // glyph → bars
-        static let height: CGFloat = 11      // capped below the ~15pt glyph so it reads as a badge
-        static let cornerRadius: CGFloat = 1.25
+    /// Gap between the glyph and the usage-percent badge to its right (points).
+    private static let badgeLeading: CGFloat = 4
+
+    // Custom robot-head mark (points), drawn by `robotImage`. This is the app's own identity glyph
+    // — Miguel wanted "algo único, un robot" instead of a generic SF Symbol (feedback 2026-07-09).
+    // Tuned to sit against the ~15pt SF Symbol used for the attention triangle so switching states
+    // doesn't jump the baseline. Drawn as a silhouette with the eyes/mouth punched out (so it tints
+    // as a clean template in light/dark, exactly like a real SF Symbol).
+    private enum Robot {
+        static let canvas = NSSize(width: 15, height: 15)
     }
 
     init(button: NSStatusBarButton?) {
@@ -50,10 +50,11 @@ final class MenuBarGlyphController {
     /// and usage, not animating) skips the redraw so we don't reallocate an identical `NSImage`
     /// on every poll — the animation timer owns redraws while busy.
     func update(status: MenuBarStatus, usage: MenuBarUsage?) {
-        let effectiveUsage = (usage?.hasAnyReading ?? false) ? usage : nil
-        let unchanged = hasRendered && status == self.status && effectiveUsage == self.usage
+        // `usage == nil` means "don't show a badge" (usage disabled); a non-nil value with a `nil`
+        // percent still draws — as "—" — so the chosen metric is visibly "on but no data yet".
+        let unchanged = hasRendered && status == self.status && usage == self.usage
         self.status = status
-        self.usage = effectiveUsage
+        self.usage = usage
         if status.shouldAnimate {
             startAnimating()
         } else {
@@ -100,27 +101,72 @@ final class MenuBarGlyphController {
         button?.image = compose(symbol: symbol, usage: usage)
     }
 
-    /// The tinted SF Symbol for the current state. Idle with no badge stays a *template* image so
-    /// the system tints it to match the menu bar (the crisp, native resting look); any other state
-    /// — or idle carrying a badge — is drawn coloured (non-template) per HITO1_DESIGN.
+    /// The glyph for the current state. The resting/working mark is the custom robot head (the
+    /// app's identity); an awaiting-permission state overrides it with the universally-legible
+    /// warning triangle (SF Symbol) so "a session needs you" stays unmistakable at a glance. Idle
+    /// with no badge stays a *template* image so the system tints it to match the menu bar (the
+    /// crisp, native resting look); any other state — or idle carrying a badge — is drawn coloured.
     private func symbolImage(alpha: CGFloat, forceColored: Bool) -> NSImage {
+        // Attention keeps the warning triangle: a robot tinted amber reads far weaker than the
+        // shape everyone already parses as "stop, look here".
+        if status.kind == .attention {
+            return warningSymbol(alpha: alpha)
+        }
+
+        let isTemplate = status.kind == .idle && !forceColored
+        return robotImage(tint: tintColor, alpha: alpha, isTemplate: isTemplate)
+    }
+
+    /// The awaiting-permission triangle (SF Symbol), coloured amber. Unchanged from the previous
+    /// all-SF-Symbol renderer.
+    private func warningSymbol(alpha: CGFloat) -> NSImage {
         let sizeConfig = NSImage.SymbolConfiguration(
             pointSize: DesignTokens.Metrics.glyphPointSize,
             weight: .semibold
         )
-        let base = NSImage(systemSymbolName: status.symbolName, accessibilityDescription: accessibilityDescription)
-
-        if status.kind == .idle && !forceColored {
-            let image = base?.withSymbolConfiguration(sizeConfig) ?? NSImage()
-            image.isTemplate = true
-            return image
-        }
-
         let tint = tintColor.withAlphaComponent(alpha)
         let paletteConfig = NSImage.SymbolConfiguration(paletteColors: [tint])
         let config = sizeConfig.applying(paletteConfig)
+        let base = NSImage(systemSymbolName: status.symbolName, accessibilityDescription: accessibilityDescription)
         let image = base?.withSymbolConfiguration(config) ?? NSImage()
         image.isTemplate = false
+        return image
+    }
+
+    /// Draws the custom robot head: a rounded head with a stubby antenna, two eyes and a mouth
+    /// punched out. Two passes — fill the silhouette (non-zero union of head + antenna), then erase
+    /// the eyes/mouth with `.destinationOut` so they become true holes. A template image (idle,
+    /// no badge) is filled black and left to the system tint; every other state is filled with the
+    /// state's colour at `alpha` (so the busy pulse and provider accent still apply).
+    private func robotImage(tint: NSColor, alpha: CGFloat, isTemplate: Bool) -> NSImage {
+        let image = NSImage(size: Robot.canvas)
+        image.lockFocus()
+        defer {
+            image.unlockFocus()
+            image.isTemplate = isTemplate
+        }
+        guard let context = NSGraphicsContext.current else { return image }
+
+        let fill = isTemplate ? NSColor.black : tint.withAlphaComponent(alpha)
+
+        // Pass 1 — solid silhouette (head + antenna stem + antenna tip), non-zero union.
+        let body = NSBezierPath()
+        body.append(NSBezierPath(roundedRect: NSRect(x: 1.5, y: 1.5, width: 12, height: 9.5), xRadius: 3, yRadius: 3))
+        body.append(NSBezierPath(rect: NSRect(x: 7, y: 10.6, width: 1, height: 1.9)))
+        body.append(NSBezierPath(ovalIn: NSRect(x: 6.1, y: 12, width: 2.8, height: 2.8)))
+        fill.setFill()
+        body.fill()
+
+        // Pass 2 — punch the eyes and mouth out of the silhouette.
+        context.compositingOperation = .destinationOut
+        let holes = NSBezierPath()
+        holes.append(NSBezierPath(ovalIn: NSRect(x: 3.9, y: 5.1, width: 2.6, height: 2.6)))   // left eye
+        holes.append(NSBezierPath(ovalIn: NSRect(x: 8.5, y: 5.1, width: 2.6, height: 2.6)))   // right eye
+        holes.append(NSBezierPath(roundedRect: NSRect(x: 5, y: 3, width: 5, height: 1.1), xRadius: 0.55, yRadius: 0.55)) // mouth
+        NSColor.black.setFill()
+        holes.fill()
+        context.compositingOperation = .sourceOver
+
         return image
     }
 
@@ -130,7 +176,7 @@ final class MenuBarGlyphController {
             return NSColor(DesignTokens.Colors.permission)
         case .busy:
             let color = status.busyProvider == .codex
-                ? DesignTokens.Colors.codexTeal
+                ? DesignTokens.Colors.codexBlue
                 : DesignTokens.Colors.claudeOrange
             return NSColor(color)
         case .idle:
@@ -149,16 +195,21 @@ final class MenuBarGlyphController {
         }
     }
 
-    // MARK: - Composition (symbol + optional mini bars)
+    // MARK: - Composition (symbol + optional usage percent)
 
-    /// Composites the symbol and (optional) two usage bars into one image. With no usage the symbol
-    /// is returned untouched so the idle template case keeps its system tinting.
+    /// Composites the symbol and (optional) usage-percent text into one image. With no usage the
+    /// symbol is returned untouched so the idle template case keeps its system tinting.
     private func compose(symbol: NSImage, usage: MenuBarUsage?) -> NSImage {
         guard let usage else { return symbol }
 
-        let barsWidth = Bar.width * 2 + Bar.gap
-        let width = symbol.size.width + Bar.leading + barsWidth
-        let height = max(symbol.size.height, Bar.height)
+        let attributed = NSAttributedString(string: badgeText(usage), attributes: [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: DesignTokens.Metrics.glyphBadgeFontSize, weight: .semibold),
+            .foregroundColor: badgeColor(usage),
+        ])
+        let textSize = attributed.size()
+
+        let width = symbol.size.width + Self.badgeLeading + ceil(textSize.width)
+        let height = max(symbol.size.height, ceil(textSize.height))
 
         let image = NSImage(size: NSSize(width: width, height: height))
         image.lockFocus()
@@ -168,50 +219,37 @@ final class MenuBarGlyphController {
             width: symbol.size.width,
             height: symbol.size.height
         ))
-
-        let barsOriginX = symbol.size.width + Bar.leading
-        let barBottom = (height - Bar.height) / 2
-        drawBar(percent: usage.fiveHour, stale: usage.isStale,
-                x: barsOriginX, bottom: barBottom)
-        drawBar(percent: usage.sevenDay, stale: usage.isStale,
-                x: barsOriginX + Bar.width + Bar.gap, bottom: barBottom)
+        attributed.draw(at: NSPoint(
+            x: symbol.size.width + Self.badgeLeading,
+            y: (height - textSize.height) / 2
+        ))
 
         image.unlockFocus()
         image.isTemplate = false
         return image
     }
 
-    /// One vertical bar: a faint full-height track, plus a fill from the bottom proportional to the
-    /// percent consumed, coloured by `UsageLevel` (provider accent → amber → red) or greyed when
-    /// the reading is stale. An unknown percent draws the track only — never a fabricated fill.
-    private func drawBar(percent: Double?, stale: Bool, x: CGFloat, bottom: CGFloat) {
-        let track = NSBezierPath(
-            roundedRect: NSRect(x: x, y: bottom, width: Bar.width, height: Bar.height),
-            xRadius: Bar.cornerRadius, yRadius: Bar.cornerRadius
-        )
-        NSColor(DesignTokens.Colors.usageTrack).setFill()
-        track.fill()
-
-        guard let percent else { return }
-        let fraction = max(0, min(1, percent / 100))
-        guard fraction > 0 else { return }
-        let fillHeight = max(Bar.width, Bar.height * fraction) // never thinner than the bar is wide
-        let fill = NSBezierPath(
-            roundedRect: NSRect(x: x, y: bottom, width: Bar.width, height: fillHeight),
-            xRadius: Bar.cornerRadius, yRadius: Bar.cornerRadius
-        )
-        fillColor(percent: percent, stale: stale).setFill()
-        fill.fill()
+    /// "51%" for a known reading, "—" for an unknown one (the chosen metric is visibly on, just
+    /// without data yet) — never a fabricated "0%".
+    private func badgeText(_ usage: MenuBarUsage) -> String {
+        guard let percent = usage.percent else {
+            return String(localized: "usage.unknown", defaultValue: "—")
+        }
+        return "\(Int(percent.rounded()))%"
     }
 
-    /// Provider accent normally; amber/red as the window fills; muted grey when stale — mirrors the
-    /// popover's `UsageSectionView` so the menu bar and the popover agree at a glance.
-    private func fillColor(percent: Double, stale: Bool) -> NSColor {
-        if stale { return NSColor(DesignTokens.Colors.idle) }
+    /// Provider accent normally; amber/red as the window fills; muted grey when stale or unknown —
+    /// mirrors the popover's `UsageSectionView` so the menu bar and the popover agree at a glance.
+    private func badgeColor(_ usage: MenuBarUsage) -> NSColor {
+        if usage.isStale { return NSColor(DesignTokens.Colors.idle) }
+        guard let percent = usage.percent else { return NSColor(DesignTokens.Colors.idle) }
         switch UsageLevel.forPercent(percent) {
-        case .normal: return NSColor(DesignTokens.Colors.claudeOrange)
-        case .warn: return NSColor(DesignTokens.Colors.usageWarn)
-        case .high: return NSColor(DesignTokens.Colors.usageHigh)
+        case .normal:
+            return NSColor(usage.provider == .codex ? DesignTokens.Colors.codexBlue : DesignTokens.Colors.claudeOrange)
+        case .warn:
+            return NSColor(DesignTokens.Colors.usageWarn)
+        case .high:
+            return NSColor(DesignTokens.Colors.usageHigh)
         }
     }
 }

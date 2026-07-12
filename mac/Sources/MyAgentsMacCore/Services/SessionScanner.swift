@@ -33,6 +33,37 @@ public struct SessionScanner: Sendable {
     /// Scans the directory and returns every session that decoded successfully, in no
     /// particular order (ordering by attention/business is a `SessionStore`/UI concern).
     public func scanSessions() -> [Session] {
+        jsonFiles().compactMap { decodeSession(at: $0) }
+    }
+
+    /// Deletes session files whose last update was more than `olderThan` ago — hygiene against the
+    /// orphans the hooks leave behind when a session dies WITHOUT a clean `SessionEnd`: a Terminal
+    /// tab closed, or the Mac shut down (`el ordenador se apagó`). Neither fires the hook, so the
+    /// `.json` lingers forever — and because a macOS hook can't record a pid, any later session in
+    /// the same folder resurrects it (`SessionLivenessJoin` matches by cwd). The
+    /// `collapsePidlessDuplicatesPerFolder` step already hides such a ghost from the live list; this
+    /// stops the directory itself from growing without bound. Best-effort: a file whose age can't be
+    /// determined, or that can't be removed, is left alone; never throws. Returns the count reaped.
+    @discardableResult
+    public func reapStaleFiles(olderThan: TimeInterval, now: Date = Date()) -> Int {
+        var reaped = 0
+        for file in jsonFiles() {
+            guard let age = ageOfSessionFile(at: file, now: now), age > olderThan else { continue }
+            do {
+                try fileManager.removeItem(at: file)
+                reaped += 1
+                logger.notice("Reaped stale session file \(file.lastPathComponent, privacy: .public) (age \(Int(age))s)")
+            } catch {
+                logger.warning("Could not reap \(file.lastPathComponent, privacy: .public): \(String(describing: error), privacy: .public)")
+            }
+        }
+        return reaped
+    }
+
+    /// The `.json` files in the sessions directory (empty if the directory is missing — the steady
+    /// state on a machine that has never run the hooks). Shared by `scanSessions` and
+    /// `reapStaleFiles` so both see exactly the same file set.
+    private func jsonFiles() -> [URL] {
         var isDirectory: ObjCBool = false
         let exists = fileManager.fileExists(atPath: directoryURL.path, isDirectory: &isDirectory)
         guard exists, isDirectory.boolValue else {
@@ -41,9 +72,8 @@ public struct SessionScanner: Sendable {
             return []
         }
 
-        let files: [URL]
         do {
-            files = try fileManager.contentsOfDirectory(
+            return try fileManager.contentsOfDirectory(
                 at: directoryURL,
                 includingPropertiesForKeys: nil,
                 options: [.skipsHiddenFiles]
@@ -52,8 +82,22 @@ public struct SessionScanner: Sendable {
             logger.warning("Could not list \(directoryURL.path, privacy: .public): \(String(describing: error), privacy: .public)")
             return []
         }
+    }
 
-        return files.compactMap { decodeSession(at: $0) }
+    /// How long ago this session file was last touched, preferring the hook's own `ts` (the state's
+    /// true age) and falling back to the file's modification date when `ts` is missing or the file
+    /// is unparseable. `nil` means "age unknown" — the caller must then NOT reap it (never delete a
+    /// file we can't date).
+    private func ageOfSessionFile(at file: URL, now: Date) -> TimeInterval? {
+        if let data = try? Data(contentsOf: file),
+           let wire = try? JSONDecoder().decode(SessionWireFormat.self, from: data),
+           wire.ts > 0 {
+            return now.timeIntervalSince(Date(timeIntervalSince1970: TimeInterval(wire.ts)))
+        }
+        if let modified = try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate {
+            return now.timeIntervalSince(modified)
+        }
+        return nil
     }
 
     private func decodeSession(at file: URL) -> Session? {

@@ -190,4 +190,53 @@ final class SessionScannerTests: XCTestCase {
         let scanner = SessionScanner(directoryURL: tempDirectory)
         XCTAssertEqual(scanner.scanSessions(), [])
     }
+
+    // MARK: - reapStaleFiles: hygiene against orphan files (terminal closed / Mac shut down)
+
+    /// A minimal but valid session JSON with an explicit `ts` (unix seconds), so a test can place a
+    /// file at a precise age.
+    private func sessionJSON(id: String, ts: Int) -> String {
+        #"{"state":"idle","provider":"claude","sessionId":"\#(id)","project":"proj","cwd":"/proj","ts":\#(ts)}"#
+    }
+
+    func testReap_removesFilesOlderThanThreshold_keepsFreshOnes() throws {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        try write(sessionJSON(id: "fresh", ts: 1_000_000 - 60), named: "fresh.json")          // 1 min old
+        try write(sessionJSON(id: "stale", ts: 1_000_000 - 48 * 3600), named: "stale.json")    // 48 h old
+        let scanner = SessionScanner(directoryURL: tempDirectory)
+
+        let reaped = scanner.reapStaleFiles(olderThan: 24 * 3600, now: now)
+
+        XCTAssertEqual(reaped, 1, "exactly the 48h-old file is reaped")
+        XCTAssertEqual(scanner.scanSessions().map(\.id), ["fresh"], "the fresh session must survive")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: tempDirectory.appendingPathComponent("stale.json").path))
+    }
+
+    func testReap_atExactlyThreshold_isKept_onlyStrictlyOlderReaped() throws {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        try write(sessionJSON(id: "boundary", ts: 1_000_000 - 24 * 3600), named: "boundary.json") // exactly 24h
+        let scanner = SessionScanner(directoryURL: tempDirectory)
+
+        XCTAssertEqual(scanner.reapStaleFiles(olderThan: 24 * 3600, now: now), 0, "age must be strictly greater than the threshold to reap")
+        XCTAssertEqual(scanner.scanSessions().map(\.id), ["boundary"])
+    }
+
+    func testReap_unparseableFile_fallsBackToModificationDate() throws {
+        // A corrupt file has no readable `ts` — its age must come from the file's mtime instead, so
+        // an old piece of junk still gets cleaned up (but a can't-be-dated file is never deleted).
+        try write("{ garbage not json }}}", named: "junk.json")
+        let file = tempDirectory.appendingPathComponent("junk.json")
+        let oldMtime = Date().addingTimeInterval(-72 * 3600)
+        try FileManager.default.setAttributes([.modificationDate: oldMtime], ofItemAtPath: file.path)
+        let scanner = SessionScanner(directoryURL: tempDirectory)
+
+        XCTAssertEqual(scanner.reapStaleFiles(olderThan: 24 * 3600), 1, "an old unparseable file is reaped by its mtime")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+    }
+
+    func testReap_missingDirectory_isANoOp() {
+        // Never created on disk — reap must not throw and must report nothing reaped.
+        let scanner = SessionScanner(directoryURL: tempDirectory)
+        XCTAssertEqual(scanner.reapStaleFiles(olderThan: 1), 0)
+    }
 }
