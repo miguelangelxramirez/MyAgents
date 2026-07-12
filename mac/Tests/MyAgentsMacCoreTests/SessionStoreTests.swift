@@ -1,4 +1,5 @@
 import XCTest
+import Combine
 @testable import MyAgentsMacCore
 
 /// Wiring test for `SessionStore`: `refresh()` must run the scan through
@@ -31,6 +32,63 @@ final class SessionStoreTests: XCTestCase {
     /// touch a real user directory), even in tests that don't care about Codex naming at all.
     private var isolatedCodexSessionScanner: CodexSessionScanner {
         CodexSessionScanner(sessionsRoot: tempDirectory.appendingPathComponent("no-such-codex-sessions", isDirectory: true))
+    }
+
+    /// The poll runs twice a second forever. `sessions` is `@Published`, so ASSIGNING it fires
+    /// `objectWillChange` even when the value is identical — and that made SwiftUI re-evaluate and
+    /// re-lay-out the menu bar item continuously with the popover closed and nothing happening
+    /// (`NSHostingView.layout`: 794 of 8078 samples in the idle profile, 2026-07-12). A refresh that
+    /// changes nothing must notify NOBODY.
+    @MainActor
+    func testRefresh_withNothingChanged_doesNotNotifyObservers() throws {
+        try #"{"state":"idle","provider":"claude","sessionId":"steady","cwd":"/Users/me/steady","pid":1}"#
+            .write(to: tempDirectory.appendingPathComponent("steady.json"), atomically: true, encoding: .utf8)
+
+        let store = SessionStore(
+            scanner: SessionScanner(directoryURL: tempDirectory),
+            discoverProcesses: { [ProcessLiveness.DiscoveredProcess(pid: 1, provider: .claude, cwd: "/Users/me/steady", executablePath: "")] },
+            codexSessionScanner: isolatedCodexSessionScanner
+        )
+
+        store.refresh() // first one populates the list — that IS a change
+        XCTAssertEqual(store.sessions.map(\.id), ["steady"])
+
+        var notifications = 0
+        let token = store.objectWillChange.sink { _ in notifications += 1 }
+        defer { token.cancel() }
+
+        store.refresh()
+        store.refresh()
+        store.refresh()
+
+        XCTAssertEqual(notifications, 0, "three polls over an unchanged world must not republish, or SwiftUI re-lays-out the menu bar for nothing")
+        XCTAssertEqual(store.sessions.map(\.id), ["steady"], "and the list is of course still there")
+    }
+
+    @MainActor
+    func testRefresh_whenSomethingActuallyChanges_stillNotifies() throws {
+        // The other half: publish-on-change must not become publish-never.
+        try #"{"state":"idle","provider":"claude","sessionId":"steady","cwd":"/Users/me/steady","pid":1}"#
+            .write(to: tempDirectory.appendingPathComponent("steady.json"), atomically: true, encoding: .utf8)
+
+        let store = SessionStore(
+            scanner: SessionScanner(directoryURL: tempDirectory),
+            discoverProcesses: { [ProcessLiveness.DiscoveredProcess(pid: 1, provider: .claude, cwd: "/Users/me/steady", executablePath: "")] },
+            codexSessionScanner: isolatedCodexSessionScanner
+        )
+        store.refresh()
+
+        var notifications = 0
+        let token = store.objectWillChange.sink { _ in notifications += 1 }
+        defer { token.cancel() }
+
+        // The session starts asking for permission — the whole point of the app.
+        try #"{"state":"permission","provider":"claude","sessionId":"steady","cwd":"/Users/me/steady","pid":1}"#
+            .write(to: tempDirectory.appendingPathComponent("steady.json"), atomically: true, encoding: .utf8)
+        store.refresh()
+
+        XCTAssertEqual(notifications, 1, "a real state change must reach the UI immediately")
+        XCTAssertTrue(store.sessions.contains { $0.id == "steady" && $0.state == .permission })
     }
 
     @MainActor

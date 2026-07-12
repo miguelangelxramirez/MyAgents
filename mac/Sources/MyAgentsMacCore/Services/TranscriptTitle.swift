@@ -24,8 +24,22 @@ public final class TranscriptTitle: @unchecked Sendable {
     private static let maxLines = 150
     private static let chunkSize = 8192
 
+    /// A recorded MISS. The point of remembering one is that a session with no ai-title line was
+    /// otherwise re-reading its transcript on EVERY poll, twice a second, forever — and a Claude
+    /// transcript on this machine reaches 100 MB.
+    private enum Miss {
+        /// Settled for good: the scan consumed the whole read window (all `maxLines` lines, or the
+        /// byte budget). A transcript is append-only, so nothing a future append adds can change
+        /// what's inside that window — this file will never yield a title. Never read it again.
+        case final
+        /// The scan hit EOF before filling the window: the file is simply short so far. Worth another
+        /// look, but ONLY once it has actually grown past this size.
+        case atSize(Int64)
+    }
+
     private let lock = NSLock()
     private var cache: [String: String] = [:] // sessionId -> resolved aiTitle (only positive hits)
+    private var misses: [String: Miss] = [:]
     private let logger = Logger(subsystem: "com.miguelangelramirez.myagents.mac", category: "TranscriptTitle")
 
     public init() {}
@@ -34,74 +48,82 @@ public final class TranscriptTitle: @unchecked Sendable {
     /// yet. `nil` when `sessionId` is empty, `transcriptPath` is empty, the file is missing or
     /// unreadable, or no ai-title line is found within the head.
     public func title(sessionId: String, transcriptPath: String) -> String? {
-        guard !sessionId.isEmpty else { return nil }
+        guard !sessionId.isEmpty, !transcriptPath.isEmpty else { return nil }
 
         lock.lock()
         let cached = cache[sessionId]
+        let miss = misses[sessionId]
         lock.unlock()
         if let cached { return cached }
 
-        guard let found = Self.readTitle(atPath: transcriptPath, logger: logger) else { return nil }
+        // Nothing new to look at: the window is settled for good (no need to even stat the file), or
+        // the file hasn't grown since the last fruitless scan, so it still holds exactly the bytes
+        // we already rejected.
+        if case .final = miss { return nil }
+        let size = Self.fileSize(atPath: transcriptPath)
+        if case .atSize(let lastSize) = miss, let size, lastSize == size { return nil }
+
+        let (found, stop) = Self.readTitle(atPath: transcriptPath, logger: logger)
 
         lock.lock()
-        cache[sessionId] = found
+        if let found {
+            cache[sessionId] = found
+            misses[sessionId] = nil
+        } else {
+            misses[sessionId] = Self.miss(for: stop, size: size)
+        }
         lock.unlock()
         return found
     }
 
-    // MARK: - File reading (never throws)
-
-    /// Reads `path` line-by-line in small chunks (never the whole file at once) up to `maxLines`,
-    /// looking for a JSON line of the form `{"type":"ai-title","aiTitle":"…"}`. Returns the LAST
-    /// such line found within the head (mirrors the C# reference, in case more than one appears),
-    /// or `nil` if none did / the file couldn't be opened.
-    private static func readTitle(atPath path: String, logger: Logger) -> String? {
-        guard !path.isEmpty else { return nil }
-        guard let handle = try? FileHandle(forReadingFrom: URL(fileURLWithPath: path)) else {
+    /// How to remember a fruitless scan.
+    ///
+    /// CRUCIAL: an UNREADABLE file is not a miss at all — it's "not there yet". The hook can publish
+    /// a session's transcript path before Claude Code has created the file, and a transcript can be
+    /// briefly unreadable for any number of reasons. Caching that as final would freeze the session's
+    /// title to its folder name FOREVER. (This is exactly the bug an earlier version of this cache
+    /// shipped: `fileSize` returned `-1` for an unstattable file and `-1` doubled as the
+    /// "settled for good" sentinel.)
+    private static func miss(for stop: BoundedLineReader.Stop, size: Int64?) -> Miss? {
+        switch stop {
+        case .lineLimit, .byteLimit:
+            // The whole read window was consumed. Append-only ⇒ that window can never change, and no
+            // append will ever make a byte beyond the budget reachable either.
+            return .final
+        case .endOfFile:
+            return size.map { .atSize($0) }
+        case .unreadable, .callerStopped:
+            // Not there (yet), or we stopped ourselves. Either way: remember nothing, look again.
             return nil
         }
-        defer { try? handle.close() }
+    }
 
+    /// `nil` when the file can't be statted (missing, unreadable) — deliberately NOT a number, so it
+    /// can never be confused with a real size or with a settled miss. See `miss(for:size:)`.
+    private static func fileSize(atPath path: String) -> Int64? {
+        try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int64
+    }
+
+    // MARK: - File reading (never throws)
+
+    /// Scans the head of `path` (at most `maxLines` lines, streamed — never the whole file) for a
+    /// JSON line of the form `{"type":"ai-title","aiTitle":"…"}`. Returns the LAST such line found
+    /// within the head (mirrors the C# reference, in case more than one appears) — hence no early
+    /// exit — together with WHY the scan stopped, which tells the caller whether a miss is final.
+    ///
+    /// A transcript's last line may have no trailing newline yet (Claude Code is still writing it);
+    /// `BoundedLineReader` delivers that final partial line too, so a title written there is found.
+    private static func readTitle(atPath path: String, logger: Logger) -> (title: String?, stop: BoundedLineReader.Stop) {
         var found: String?
-        var linesRead = 0
-        var buffer = Data()
-        var hitEOF = false
-        let newline = UInt8(ascii: "\n")
-
-        func consider(_ lineData: Data) {
-            guard let line = String(data: lineData, encoding: .utf8), line.contains("ai-title"),
-                  let title = extractAITitle(from: line) else { return }
+        let stop = BoundedLineReader.forEachLine(of: URL(fileURLWithPath: path), maxLines: maxLines, chunkSize: chunkSize) { line in
+            guard line.contains("ai-title"), let title = extractAITitle(from: line) else { return .continue }
             found = title
+            return .continue
         }
-
-        while linesRead < maxLines {
-            let chunk: Data
-            do {
-                chunk = try handle.read(upToCount: chunkSize) ?? Data()
-            } catch {
-                logger.debug("Could not read transcript chunk: \(String(describing: error), privacy: .public)")
-                break
-            }
-            if chunk.isEmpty { hitEOF = true; break } // EOF
-            buffer.append(chunk)
-
-            while linesRead < maxLines, let newlineIndex = buffer.firstIndex(of: newline) {
-                let lineData = buffer[buffer.startIndex..<newlineIndex]
-                buffer.removeSubrange(buffer.startIndex...newlineIndex)
-                linesRead += 1
-                consider(lineData)
-            }
+        if stop == .unreadable {
+            logger.debug("Could not read transcript at \(path, privacy: .public)")
         }
-
-        // A transcript's LAST line may have no trailing newline yet (Claude Code is still writing
-        // it, or the file simply doesn't end in "\n") — `StreamReader.ReadLine()` in the C#
-        // reference still returns that final partial line, so this must too, or a title written
-        // as the very last (unterminated) line would never be found.
-        if hitEOF, linesRead < maxLines, !buffer.isEmpty {
-            consider(buffer)
-        }
-
-        return found
+        return (found, stop)
     }
 
     /// Parses one JSONL line and returns its `aiTitle` value if the line really is a

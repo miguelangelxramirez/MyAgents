@@ -151,4 +151,59 @@ final class TranscriptTitleTests: XCTestCase {
 
         XCTAssertEqual(sut.title(sessionId: "retry-session", transcriptPath: path), "Arrived late")
     }
+
+    func testNoTitleAnywhereInTheHead_isAFinalMiss_neverReRead() throws {
+        // The other half of the miss contract, and the reason it exists: when a scan consumes the
+        // WHOLE 150-line head without finding a title, the answer is settled — a transcript is
+        // append-only, so those 150 lines can never change. Re-reading them on every 0.5s poll is
+        // exactly what made a 100 MB transcript ruinous to poll.
+        //
+        // Proof that no second read happens: the file is rewritten with a title at line 1, and the
+        // next call must STILL say nil. (A real transcript can't be rewritten like this; a scanner
+        // that re-read the file would return "Impossible" and fail here.)
+        let path = try write((0..<200).map { #"{"type":"filler","n":\#($0)}"# }, named: "final-miss.jsonl")
+        let sut = TranscriptTitle()
+
+        XCTAssertNil(sut.title(sessionId: "final-miss", transcriptPath: path))
+
+        try #"{"type":"ai-title","aiTitle":"Impossible"}"#.write(to: URL(fileURLWithPath: path), atomically: true, encoding: .utf8)
+
+        XCTAssertNil(
+            sut.title(sessionId: "final-miss", transcriptPath: path),
+            "a miss over the full head window is final — the transcript must never be read again"
+        )
+    }
+
+    func testTranscriptThatDoesNotExistYet_isNotAPermanentMiss_titleAppearsOnceItIsCreated() throws {
+        // REGRESSION (external review, 2026-07-12). The hook can publish a session's transcript PATH
+        // before Claude Code has created the file. An earlier version of the miss cache used `-1` as
+        // "couldn't stat the file" AND as "window fully scanned, never look again" — the same value —
+        // so a not-yet-created transcript was written off FOREVER and the session was stuck showing
+        // its folder name for the rest of the app's life. An unreadable file must cache NOTHING.
+        let path = tempDirectory.appendingPathComponent("not-yet.jsonl").path
+        let sut = TranscriptTitle()
+
+        XCTAssertNil(sut.title(sessionId: "late", transcriptPath: path), "the file doesn't exist yet")
+
+        try #"{"type":"ai-title","aiTitle":"Created a moment later"}"#
+            .write(to: URL(fileURLWithPath: path), atomically: true, encoding: .utf8)
+
+        XCTAssertEqual(
+            sut.title(sessionId: "late", transcriptPath: path),
+            "Created a moment later",
+            "a transcript that didn't exist yet must be picked up as soon as it does"
+        )
+    }
+
+    func testHugePastedLineInTheHead_doesNotHideTheTitle() throws {
+        // A pasted image is a single multi-megabyte line. It can't be a title, so it must be walked
+        // past and discarded — not buffered, and not allowed to swallow the title after it.
+        let path = try write([
+            String(repeating: "x", count: 2_000_000),
+            #"{"type":"ai-title","aiTitle":"Behind the blob"}"#,
+        ], named: "blob.jsonl")
+
+        let sut = TranscriptTitle()
+        XCTAssertEqual(sut.title(sessionId: "blob-session", transcriptPath: path), "Behind the blob")
+    }
 }

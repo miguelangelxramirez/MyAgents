@@ -57,8 +57,13 @@ public final class UsageStore: ObservableObject {
         async let newClaude = Task.detached { claudeService.fetch() }.value
         async let newCodex = Task.detached { await codexService.fetch() }.value
         let (claudeResult, codexResult) = await (newClaude, newCodex)
-        claude = Self.merge(newValue: claudeResult, keeping: claude)
-        codex = Self.merge(newValue: codexResult, keeping: codex)
+        // Publish only on a real change — assigning an `@Published` fires `objectWillChange` even
+        // when the value is identical, which would re-render every usage bar (and the menu-bar
+        // badge) on each refresh for nothing. Same contract as `SessionStore.apply`.
+        let mergedClaude = Self.merge(newValue: claudeResult, keeping: claude)
+        let mergedCodex = Self.merge(newValue: codexResult, keeping: codex)
+        if mergedClaude != claude { claude = mergedClaude }
+        if mergedCodex != codex { codex = mergedCodex }
     }
 
     /// A fresh reading with no data at all (a transient blip: file briefly missing, RPC timed

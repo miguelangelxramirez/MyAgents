@@ -171,7 +171,15 @@ public final class SessionStore: ObservableObject {
         // (pending doesn't affect ordering, so either order works; this keeps the tracker's view of
         // "current sessions" in sync with what we publish).
         let withPending = pendingTracker.apply(to: withNames)
-        sessions = SessionOrdering.attentionFirst(withPending)
+        let ordered = SessionOrdering.attentionFirst(withPending)
+
+        // Publish ONLY on a real change. `sessions` is `@Published`, so assigning it fires
+        // `objectWillChange` whether or not the value differs — and this runs twice a second,
+        // forever. Re-publishing an identical list made SwiftUI re-evaluate and re-lay-out the menu
+        // bar item continuously even with the popover closed and nothing happening
+        // (`NSHostingView.layout`: 794 of 8078 samples in the idle profile, 2026-07-12).
+        guard ordered != sessions else { return }
+        sessions = ordered
     }
 
     /// Marks a session as opened (the row was clicked) — clears its pending dot immediately, without

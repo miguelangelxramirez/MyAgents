@@ -317,4 +317,163 @@ final class CodexSessionScannerTests: XCTestCase {
         XCTAssertNil(scanner.name(forCwd: "/Users/me/shared-project"), "ambiguous cwd must never resolve to either session's name")
         XCTAssertNil(scanner.latestSession(forCwd: "/Users/me/shared-project"), "ambiguous cwd must never resolve a state either")
     }
+
+    // MARK: - The header is read ONCE (the fix for the 113%-CPU poll loop, 2026-07-12)
+
+    func testName_isReadOnce_thenServedFromCache_notReRreadEveryScan() throws {
+        // A rollout is append-only, so its id/cwd/first-prompt can never change — re-reading them on
+        // every 0.5s poll is what let a 10 MB rollout burn a whole CPU core. This test proves the
+        // read doesn't happen twice: after the first scan, the file's prompt is REWRITTEN on disk,
+        // and the second scan must still report the original name. A scanner that re-reads would
+        // return "Rewritten on disk" and fail here.
+        let file = try writeRollout(sessionId: "once", cwd: "/Users/me/proj", lines: [userMessageLine("The original prompt")])
+
+        let scanner = CodexSessionScanner(sessionsRoot: sessionsRoot)
+        XCTAssertEqual(scanner.scanRecentSessions().first?.name, "The original prompt")
+
+        let metaLine = #"{"timestamp":"2026-07-08T16:43:26.739Z","type":"session_meta","payload":{"session_id":"once","id":"once","cwd":"/Users/me/proj"}}"#
+        try ([metaLine, userMessageLine("Rewritten on disk")].joined(separator: "\n") + "\n")
+            .write(to: file, atomically: true, encoding: .utf8)
+
+        XCTAssertEqual(
+            scanner.scanRecentSessions().first?.name,
+            "The original prompt",
+            "the name must come from the cache — a rollout's first prompt is immutable, so it is never re-read"
+        )
+    }
+
+    func testStillNameless_isRetriedOnceTheFileGrows() throws {
+        // The flip side: a session too young to have a prompt yet must NOT be cached as permanently
+        // nameless — when the user finally types, the next scan has to pick it up.
+        let file = try writeRollout(sessionId: "young", cwd: "/Users/me/young", lines: [])
+
+        let scanner = CodexSessionScanner(sessionsRoot: sessionsRoot)
+        XCTAssertEqual(scanner.scanRecentSessions().first?.name, "", "no prompt yet")
+
+        let metaLine = #"{"timestamp":"2026-07-08T16:43:26.739Z","type":"session_meta","payload":{"session_id":"young","id":"young","cwd":"/Users/me/young"}}"#
+        try ([metaLine, userMessageLine("Finally, a prompt")].joined(separator: "\n") + "\n")
+            .write(to: file, atomically: true, encoding: .utf8)
+
+        XCTAssertEqual(scanner.scanRecentSessions().first?.name, "Finally, a prompt", "a nameless session must be re-scanned once its rollout grows")
+    }
+
+    // MARK: - The 16 KiB tail must survive landing inside a multi-byte character
+
+    func testTailStartingMidUTF8Character_stillFindsTheMarker() throws {
+        // REGRESSION (external review, 2026-07-12). `inferState` seeks to `size - 16384` — an
+        // ARBITRARY byte offset — and used to decode that whole block with one strict
+        // `String(data:encoding:.utf8)`. When the offset lands inside a multi-byte character (any
+        // accented Spanish prompt makes this likely), the decode returns nil, EVERY marker behind it
+        // is thrown away, and the session silently falls through to the 30-second recency heuristic —
+        // showing "Working" for a turn that had already completed.
+        //
+        // This file is built byte-exactly so the tail window is GUARANTEED to begin in the middle of
+        // an "é" (2 bytes), not by luck.
+        let meta = #"{"timestamp":"2026-07-08T16:43:26.739Z","type":"session_meta","payload":{"session_id":"utf8","id":"utf8","cwd":"/Users/me/utf8"}}"#
+        let accents = String(repeating: "é", count: 12_000) // one 24_000-byte line
+        var marker = #"{"timestamp":"2026-07-08T16:44:00.000Z","type":"event_msg","payload":{"type":"task_complete"}}"#
+
+        let accentsStart = meta.utf8.count + 1 // the "é" block begins right after the meta line
+        func tailOffset(_ m: String) -> Int {
+            (accentsStart + accents.utf8.count + 1 + m.utf8.count + 1) - 16_384
+        }
+        // Trailing spaces after the JSON keep the line valid while shifting parity by one byte.
+        while (tailOffset(marker) - accentsStart) % 2 == 0 { marker += " " }
+
+        let content = [meta, accents, marker].joined(separator: "\n") + "\n"
+        let offset = tailOffset(marker)
+        XCTAssertTrue(offset > accentsStart && offset < accentsStart + accents.utf8.count,
+                      "precondition: the tail must start inside the accented block")
+        XCTAssertEqual((offset - accentsStart) % 2, 1,
+                       "precondition: the tail must start on the SECOND byte of an é, i.e. mid-character")
+
+        let file = sessionsRoot.appendingPathComponent("2026/07/08", isDirectory: true)
+            .appendingPathComponent("rollout-utf8.jsonl")
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try content.write(to: file, atomically: true, encoding: .utf8)
+
+        let scanner = CodexSessionScanner(sessionsRoot: sessionsRoot, fileListTTL: 0)
+        let session = try XCTUnwrap(scanner.scanRecentSessions().first { $0.sessionId == "utf8" })
+
+        XCTAssertEqual(
+            session.state,
+            .idle,
+            "task_complete must still be found — a tail that starts mid-character must not throw away every marker behind it"
+        )
+    }
+
+    // MARK: - Per-poll cost: the tail and the tree walk are not re-done for nothing
+
+    func testState_isRecomputed_assoonAsTheRolloutIsWrittenTo() throws {
+        // THE risk of caching the tail-derived state: a session that freezes on a stale state. The
+        // cache is keyed on the file's mtime+size, so the moment Codex appends anything, the state
+        // must be re-derived. Break the invalidation and this test freezes on `.idle` and fails.
+        let file = try writeRollout(sessionId: "moving", cwd: "/Users/me/moving", lines: [
+            #"{"timestamp":"2026-07-08T16:43:26.739Z","type":"event_msg","payload":{"type":"task_complete"}}"#,
+        ])
+        let scanner = CodexSessionScanner(sessionsRoot: sessionsRoot, fileListTTL: 0)
+
+        XCTAssertEqual(scanner.scanRecentSessions().first?.state, .idle, "the last marker is task_complete")
+
+        // Codex starts a new turn: append a task_started marker.
+        let appended = try String(contentsOf: file, encoding: .utf8)
+            + #"{"timestamp":"2026-07-08T16:44:00.000Z","type":"event_msg","payload":{"type":"task_started"}}"# + "\n"
+        try appended.write(to: file, atomically: true, encoding: .utf8)
+
+        XCTAssertEqual(
+            scanner.scanRecentSessions().first?.state,
+            .tool,
+            "a rollout that has been written to must have its state re-read, never served stale from the cache"
+        )
+    }
+
+    func testFileListTTL_reusesTheTreeWalk_butZeroTTLRediscoversImmediately() throws {
+        // Walking the whole ~/.codex/sessions tree (190 files on the real machine) twice a second
+        // just to re-discover a file set that only changes when a session is created was 217 of 8078
+        // samples in the idle profile. With a TTL, the walk is reused; with TTL 0, it isn't.
+        try writeRollout(sessionId: "first", cwd: "/Users/me/a", lines: [userMessageLine("First")])
+
+        let cached = CodexSessionScanner(sessionsRoot: sessionsRoot, fileListTTL: 600)
+        XCTAssertEqual(cached.scanRecentSessions().map(\.sessionId), ["first"])
+
+        try writeRollout(sessionId: "second", cwd: "/Users/me/b", lines: [userMessageLine("Second")])
+
+        XCTAssertEqual(
+            cached.scanRecentSessions().map(\.sessionId),
+            ["first"],
+            "within the TTL the tree is not re-walked, so the brand-new rollout isn't discovered yet"
+        )
+
+        let live = CodexSessionScanner(sessionsRoot: sessionsRoot, fileListTTL: 0)
+        XCTAssertEqual(Set(live.scanRecentSessions().map(\.sessionId)), ["first", "second"], "with no TTL the walk happens every scan")
+    }
+
+    func testAgedOutRollout_isStillDropped_evenWhileTheTreeWalkIsCached() throws {
+        // The TTL caches only WHICH files exist — the age filter must still run on every scan, or a
+        // rollout that goes stale would linger in the list for as long as the TTL.
+        try writeRollout(sessionId: "ages-out", cwd: "/Users/me/ages", lines: [userMessageLine("Old")])
+
+        let scanner = CodexSessionScanner(sessionsRoot: sessionsRoot, maxAge: 1800, fileListTTL: 600)
+        XCTAssertEqual(scanner.scanRecentSessions().map(\.sessionId), ["ages-out"])
+
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(-3600)],
+            ofItemAtPath: sessionsRoot.appendingPathComponent("2026/07/08/rollout-ages-out.jsonl").path
+        )
+
+        XCTAssertTrue(scanner.scanRecentSessions().isEmpty, "the age filter runs every scan, cached file list or not")
+    }
+
+    func testHugePastedBlobBeforeThePrompt_doesNotHideTheName() throws {
+        // The exact production shape (verified on this machine): a multi-megabyte pasted blob sits
+        // inside the 60-line name window. It must be walked past and skipped — not buffered, and not
+        // allowed to swallow the real prompt that follows it.
+        let blob = userMessageLine(String(repeating: "z", count: 2_000_000))
+        try writeRollout(sessionId: "blobby", cwd: "/Users/me/blobby", lines: [blob, userMessageLine("The real prompt")])
+
+        let scanner = CodexSessionScanner(sessionsRoot: sessionsRoot)
+        let session = try XCTUnwrap(scanner.scanRecentSessions().first { $0.sessionId == "blobby" })
+
+        XCTAssertEqual(session.name, "The real prompt", "the over-long line is skipped and the prompt after it is still found")
+    }
 }

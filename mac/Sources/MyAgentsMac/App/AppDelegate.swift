@@ -65,15 +65,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = item
     }
 
+    /// The popover is created empty and only gets its SwiftUI content when it's actually shown (see
+    /// `mountPopoverContent`), which is then released again on close (`popoverDidClose`).
+    ///
+    /// ENERGY LAW (measured 2026-07-12): a retained `NSHostingController` keeps its SwiftUI view
+    /// alive and SUBSCRIBED to the stores even while the popover is invisible — and with
+    /// `sizingOptions = [.preferredContentSize]`, every store change makes AppKit re-measure it. With
+    /// sessions publishing as agents work, that was `NSHostingView.layout` running forever on a view
+    /// nobody can see: 643 of 8078 samples in the idle profile. A closed popover must cost nothing.
     private func configurePopover() {
         let popover = NSPopover()
         popover.behavior = .transient
         popover.animates = true
         popover.delegate = self
+        self.popover = popover
+    }
+
+    /// Builds the popover's SwiftUI content if it isn't mounted. Cheap: it happens on a click, at
+    /// human speed, not on the 2 Hz poll.
+    private func mountPopoverContent(_ popover: NSPopover) {
+        guard popover.contentViewController == nil else { return }
         let hosting = NSHostingController(rootView: makeRootView(isDetached: false))
         hosting.sizingOptions = [.preferredContentSize]
         popover.contentViewController = hosting
-        self.popover = popover
     }
 
     /// The SwiftUI root, parameterised by where it's hosted. Both the anchored popover and the
@@ -149,6 +163,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             sessionStore.refresh()
             model.refreshStatus()
             NSApp.activate(ignoringOtherApps: true)
+            mountPopoverContent(popover)
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             // Make the popover window key so SwiftUI controls INSIDE it (the session-row buttons,
             // which live in a ScrollView) receive the click. Without this, an LSUIElement app's
@@ -198,25 +213,42 @@ extension AppDelegate: NSPopoverDelegate {
     /// 2026-07-11: "arrástralo y que escape de ahí, que se quede flotante").
     func popoverShouldDetach(_ popover: NSPopover) -> Bool { true }
 
+    /// Release the popover's SwiftUI content the moment it's no longer on screen, so nothing stays
+    /// subscribed to the stores and re-laying-out invisibly (see `configurePopover`). It's rebuilt on
+    /// the next click. Safe with the tear-off: the detached window hosts its OWN root view
+    /// (`makeDetachedWindow`), so dropping this one takes nothing away from it.
+    func popoverDidClose(_ notification: Notification) {
+        popover?.contentViewController = nil
+    }
+
     /// The window the torn-off popover becomes: a lightweight always-on-top panel (so the sessions
     /// stay visible while you work in another app) hosting the SAME SwiftUI root in `isDetached`
     /// mode. We own its content, so the anchored popover and this window are independent views over
     /// the shared stores — no content is "stolen" from the popover.
     func detachableWindow(for popover: NSPopover) -> NSWindow? {
-        detachedWindow ?? makeDetachedWindow()
+        let window = detachedWindow ?? makeDetachedWindow()
+        mountDetachedContent(window)
+        return window
+    }
+
+    /// Same energy law as the popover (see `configurePopover`): the torn-off window is reused across
+    /// detaches, so its SwiftUI content is mounted when it's about to be shown and dropped again in
+    /// `windowWillClose` — a hidden window must not keep a view subscribed to the stores.
+    private func mountDetachedContent(_ window: NSWindow) {
+        guard window.contentViewController == nil else { return }
+        let hosting = NSHostingController(rootView: makeRootView(isDetached: true))
+        hosting.sizingOptions = [.preferredContentSize]
+        window.contentViewController = hosting
     }
 
     private func makeDetachedWindow() -> NSWindow {
-        let hosting = NSHostingController(rootView: makeRootView(isDetached: true))
-        hosting.sizingOptions = [.preferredContentSize]
-
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: DesignTokens.Metrics.popoverWidth, height: 1),
             styleMask: [.titled, .closable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
-        window.contentViewController = hosting
+        window.delegate = self
         // Chrome-light: no visible title, content runs edge-to-edge under a transparent titlebar,
         // draggable from anywhere. Minimise/zoom are hidden — an accessory app has no Dock tile to
         // minimise into, and "return to the menu bar" is the in-header button, not the traffic light.
@@ -237,5 +269,17 @@ extension AppDelegate: NSPopoverDelegate {
     /// just hide the floating window. The next status-item click shows the popover anchored again.
     private func returnToMenuBar() {
         detachedWindow?.close()
+    }
+}
+
+// MARK: - The torn-off window's content dies with its visibility
+
+extension AppDelegate: NSWindowDelegate {
+    /// The window is kept (and reused) across detaches, but its SwiftUI tree must not outlive its
+    /// visibility: an invisible `NSHostingView` still observes the stores and still re-lays-out on
+    /// every change. `detachableWindow(for:)` re-mounts it on the next tear-off.
+    func windowWillClose(_ notification: Notification) {
+        guard (notification.object as AnyObject?) === detachedWindow else { return }
+        detachedWindow?.contentViewController = nil
     }
 }
