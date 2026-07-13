@@ -11,13 +11,15 @@ struct MenuBarUsage: Equatable {
     var isStale: Bool
 }
 
-/// Draws (and, only while something is busy, animates) the status-bar glyph, plus an optional
-/// usage badge (two mini bars).
+/// Draws (and, only while a session is waiting on a human, animates) the status-bar glyph, plus an
+/// optional usage badge (two mini bars).
 ///
 /// The animation is a frame-swap `Timer` that re-renders the `NSImage` each tick — Core Animation
 /// on a status-item button is unreliable, so we redraw the image ourselves (per HITO1_DESIGN).
-/// ENERGY LAW: the timer exists ONLY while `MenuBarStatus.shouldAnimate` (i.e. `.busy`); every
-/// other state sets a single static image and tears the timer down.
+/// ENERGY LAW: the timer exists ONLY while `MenuBarStatus.shouldAnimate` (i.e. `.attention`), and
+/// even then only for `MenuBarStatus.attentionPulseWindow` — see `startAnimating`. Every other
+/// state sets a single static image and tears the timer down. Working sessions do NOT animate: a
+/// pulse that runs as long as an agent works is the single most expensive thing this app can do.
 @MainActor
 final class MenuBarGlyphController {
     private weak var button: NSStatusBarButton?
@@ -28,6 +30,13 @@ final class MenuBarGlyphController {
     private var animationTimer: Timer?
     private var phase: CGFloat = 0
     private var hasRendered = false
+
+    /// Frames the pulse may still draw. Counts down to zero, after which the next peak of the
+    /// breath settles the glyph into its solid image and kills the timer.
+    private var pulseFramesRemaining = 0
+
+    /// A calm breath; also the unit `pulseFrameBudget` is denominated in.
+    private static let fps: Double = 12
 
     /// Gap between the glyph and the usage-percent badge to its right (points).
     private static let badgeLeading: CGFloat = 4
@@ -45,52 +54,76 @@ final class MenuBarGlyphController {
         self.button = button
     }
 
-    /// New data arrived. Re-evaluates the static/animated decision and redraws. Starting or
-    /// stopping the timer is driven purely by `status.shouldAnimate`. A no-op update (same status
-    /// and usage, not animating) skips the redraw so we don't reallocate an identical `NSImage`
-    /// on every poll — the animation timer owns redraws while busy.
+    /// New data arrived. Re-evaluates the static/animated decision and redraws. A no-op update
+    /// (same status and usage, not animating) skips the redraw so we don't reallocate an identical
+    /// `NSImage` — while the pulse runs, its timer owns the redraws.
+    ///
+    /// The pulse rings on the *transition* into `.attention`, so it is armed only when the kind
+    /// actually changes. A second session raising its hand while the glyph is already amber does
+    /// not re-ring it: the glyph is already saying "you are needed", and re-arming on every update
+    /// would let a chatty stream of sessions keep the timer alive indefinitely.
     func update(status: MenuBarStatus, usage: MenuBarUsage?) {
         // `usage == nil` means "don't show a badge" (usage disabled); a non-nil value with a `nil`
         // percent still draws — as "—" — so the chosen metric is visibly "on but no data yet".
         let unchanged = hasRendered && status == self.status && usage == self.usage
+        let enteredNewKind = !hasRendered || status.kind != self.status.kind
         self.status = status
         self.usage = usage
-        if status.shouldAnimate {
+        defer { hasRendered = true }
+
+        if status.shouldAnimate, enteredNewKind {
             startAnimating()
-        } else {
+        } else if !status.shouldAnimate {
             stopAnimating()
-            if !unchanged { redraw() }
-            hasRendered = true
-            return
         }
+        // While the pulse is running its timer redraws every frame; a changed badge still needs a
+        // redraw of its own for the non-animating case (and costs nothing during one).
         if !unchanged { redraw() }
-        hasRendered = true
     }
 
     // MARK: - Animation (energy-gated)
 
+    /// Arms the pulse with a finite frame budget. `.common` mode keeps it alive while the user
+    /// tracks a menu. The timer tears *itself* down when the budget runs out, so the glyph cannot
+    /// pulse for longer than `MenuBarStatus.attentionPulseWindow` no matter how long the session
+    /// sits there waiting — the whole point of the policy.
     private func startAnimating() {
-        guard animationTimer == nil else { return }
-        // ~12 fps is a calm pulse; `.common` mode keeps it alive while the user tracks a menu.
-        let timer = Timer(timeInterval: 1.0 / 12.0, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.phase += 0.16
-                self?.redraw()
-            }
+        stopAnimating()
+        let budget = status.pulseFrameBudget(fps: Self.fps)
+        guard budget > 0 else { return }
+        pulseFramesRemaining = budget
+
+        let timer = Timer(timeInterval: 1.0 / Self.fps, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.tick() }
         }
         RunLoop.main.add(timer, forMode: .common)
         animationTimer = timer
     }
 
+    /// One frame of breath. Once the budget is spent we don't cut mid-breath — that reads as a
+    /// flash — we wait for the next peak, where the pulsing glyph and the solid one are the same
+    /// image, and stop there. That costs at most one more cycle (~3 s).
+    private func tick() {
+        phase += 0.16
+        if pulseFramesRemaining > 0 {
+            pulseFramesRemaining -= 1
+        } else if pulseAlpha >= 0.99 {
+            stopAnimating()   // leaves the glyph solid: `pulseAlpha` is 1 with no timer running
+        }
+        redraw()
+    }
+
     private func stopAnimating() {
         animationTimer?.invalidate()
         animationTimer = nil
+        pulseFramesRemaining = 0
         phase = 0
     }
 
-    /// A soft breathing alpha for the busy pulse.
+    /// A soft breathing alpha while the pulse runs, and full strength the moment it stops — so the
+    /// glyph settles into exactly the solid image every static state draws.
     private var pulseAlpha: CGFloat {
-        guard status.shouldAnimate else { return 1 }
+        guard animationTimer != nil else { return 1 }
         return 0.5 + 0.5 * (0.5 + 0.5 * sin(phase))
     }
 
@@ -137,7 +170,8 @@ final class MenuBarGlyphController {
     /// punched out. Two passes — fill the silhouette (non-zero union of head + antenna), then erase
     /// the eyes/mouth with `.destinationOut` so they become true holes. A template image (idle,
     /// no badge) is filled black and left to the system tint; every other state is filled with the
-    /// state's colour at `alpha` (so the busy pulse and provider accent still apply).
+    /// state's colour at `alpha` (so the provider accent still applies). The robot never pulses:
+    /// `alpha` is 1 for every state that reaches it — only the attention triangle animates.
     private func robotImage(tint: NSColor, alpha: CGFloat, isTemplate: Bool) -> NSImage {
         let image = NSImage(size: Robot.canvas)
         image.lockFocus()

@@ -32,8 +32,7 @@ public struct MenuBarStatus: Equatable, Sendable {
         self.busyProvider = busyProvider
     }
 
-    /// The one place the glyph state is decided. Never animates on `.attention` (a steady, loud
-    /// glyph reads as "stuck, fix me" better than a pulsing one) — only `.busy` earns motion.
+    /// The one place the glyph state is decided.
     public static func evaluate(_ sessions: [Session]) -> MenuBarStatus {
         if sessions.contains(where: \.needsAttention) {
             return MenuBarStatus(kind: .attention, busyProvider: nil)
@@ -44,9 +43,27 @@ public struct MenuBarStatus: Equatable, Sendable {
         return MenuBarStatus(kind: .idle, busyProvider: nil)
     }
 
-    /// ENERGY LAW, in data form: the frame-swap Timer may run ONLY while something is genuinely
-    /// busy. Idle and (deliberately) attention are static.
-    public var shouldAnimate: Bool { kind == .busy }
+    /// ENERGY LAW, in data form: the frame-swap Timer may run ONLY while a session is waiting on a
+    /// human. Motion is spent where it buys something — a permission prompt the user must answer —
+    /// and nowhere else. `.busy` is deliberately static: it can last hours, and a pulse that runs
+    /// for hours costs a measured ~6.7 % of a core while telling the user nothing they can act on
+    /// (the popover already shows what each session is doing). `.idle` never moves.
+    public var shouldAnimate: Bool { kind == .attention }
+
+    /// How long the attention pulse is allowed to run before the glyph settles into its solid amber
+    /// triangle. The pulse is a *doorbell*, not a siren: it earns its cost by catching the eye on
+    /// the transition into `.attention`. Once it has been ringing this long, either the user saw it
+    /// or they are away from the Mac — and a glyph that pulses all night is exactly the cost this
+    /// policy exists to avoid. The static triangle keeps saying "a session needs you" for free.
+    public static let attentionPulseWindow: TimeInterval = 30
+
+    /// The frame budget for the pulse at a given frame rate — the energy law expressed in the only
+    /// unit the renderer's `Timer` understands. Zero for every state that must not move, so the
+    /// renderer cannot animate a state the law forbids even if it forgets to ask `shouldAnimate`.
+    public func pulseFrameBudget(fps: Double) -> Int {
+        guard shouldAnimate, fps > 0 else { return 0 }
+        return Int((Self.attentionPulseWindow * fps).rounded())
+    }
 
     /// SF Symbol name for the current state. Today only `.attention` actually reaches an SF Symbol
     /// in the renderer (the warning triangle) — `MenuBarGlyphController` draws its own robot-head
