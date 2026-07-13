@@ -38,9 +38,9 @@ cask "myagents" do
   # hooks there must be removed through the app itself first (see caveats below) so the installer
   # can restore any statusline it chained rather than leaving Claude Code in a half-configured state.
   zap trash: [
+    "~/Library/HTTPStorages/com.miguelangelramirez.myagents.mac",
     "~/Library/Preferences/com.miguelangelramirez.myagents.mac.plist",
     "~/Library/Saved Application State/com.miguelangelramirez.myagents.mac.savedState",
-    "~/Library/HTTPStorages/com.miguelangelramirez.myagents.mac",
   ]
 
   caveats <<~EOS
