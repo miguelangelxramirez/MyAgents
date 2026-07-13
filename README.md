@@ -1,4 +1,5 @@
 ![Windows](https://img.shields.io/badge/platform-Windows-blue)
+![macOS](https://img.shields.io/badge/platform-macOS-black)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 # MyAgents
@@ -12,6 +13,9 @@ tab with one click, and keep an eye on your 5h / 7d usage — **without reading 
 undocumented endpoint**.
 
 Works whether you run the CLIs in **WSL** or **native Windows (PowerShell)**.
+
+**On macOS** it's a **menu-bar app** doing the same job — same hooks, same privacy rules, native UI.
+Install it with `brew install --cask miguelangelxramirez/tap/myagents` (see [Install](#install)).
 
 ---
 
@@ -49,6 +53,8 @@ and/or a **Codex** plan (the same accounts the CLIs use).
 
 ## Install
 
+### Windows
+
 ```powershell
 winget install MiguelAngelRamirez.MyAgents
 ```
@@ -58,6 +64,20 @@ winget install MiguelAngelRamirez.MyAgents
 **⊞ Win** and type "MyAgents" to reopen it), and — if you enable **Start with Windows** — launches on boot.
 
 Or download the latest `MyAgents.exe` from the [Releases](https://github.com/miguelangelxramirez/MyAgents/releases) page and run it directly (it's a self-contained single file — no install needed).
+
+### macOS
+
+```bash
+brew install --cask miguelangelxramirez/tap/myagents
+```
+
+Then launch it once (`open -a MyAgents`, or from Spotlight) — it lives in the **menu bar**, with no Dock icon.
+Open its ⚙ menu and choose **Enable tracking** the first time, so it can see your sessions.
+
+Or download `MyAgentsMac-<version>.zip` from the [Releases](https://github.com/miguelangelxramirez/MyAgents/releases) page.
+It's signed with a Developer ID and **notarized by Apple**, so it opens with a double-click — no Gatekeeper warnings.
+
+Requires **macOS 26** or newer. To update: `brew update && brew upgrade --cask myagents`.
 
 ## Use
 
