@@ -1,12 +1,15 @@
 // IconArt.swift — draws the MyAgents master 1024x1024 app-icon artwork with plain CoreGraphics
 // (no AppKit/NSApplication needed, so it runs headless via `swift IconArt.swift <out.png>`).
 //
-// Design (HITO 3, see mac/README.md "App icon"):
+// Design (see mac/README.md "App icon"):
 //   - macOS-style squircle plate, dark graphite — premium/utility, not "AI gradient".
-//   - A terminal prompt mark built from two solid geometric shapes in the two brand colors this
-//     app already uses for its provider accents (DesignTokens.swift):
-//       - claudeOrange #D97757 -> the ">" chevron (two round-capped strokes meeting at an apex)
-//       - codexTeal    #40C4B4 -> the cursor block
+//   - The mark is THE ROBOT HEAD — the same one the menu-bar glyph draws, scaled up from the same
+//     15pt geometry (see MenuBarGlyphController.robotImage). One face in the menu bar, in Finder
+//     and on the web: Miguel's call (2026-07-13), replacing the earlier "> _" terminal mark, which
+//     was a second, unrelated identity.
+//   - Both provider accents carry the brand (DesignTokens.swift):
+//       - claudeOrange #D97757 -> the head silhouette
+//       - codexTeal    #40C4B4 -> the eyes (lit); the mouth is knocked back to the plate colour
 //   No text/font glyphs, no gradients, no photographic effects — flat fills only.
 //
 // Usage: swift IconArt.swift /path/to/AppIcon-1024.png
@@ -69,45 +72,49 @@ context.setStrokeColor(plateStroke)
 context.setLineWidth(2)
 context.strokePath()
 
-// 2) Terminal-prompt mark: "> _" built from geometric primitives only.
-let midY = canvas / 2
-let apexX = canvas / 2 - 30
+// 2) The robot head — the SAME shapes MenuBarGlyphController.robotImage draws on its 15x15pt
+// canvas, scaled up here. Keeping the source geometry identical (rather than re-eyeballing it at
+// 1024) is the whole point: the icon and the menu-bar glyph must be the same face, so a tweak to
+// one is a tweak to both.
+let unit: CGFloat = 40                     // one point of the 15pt glyph -> 40px here
 
-let armLength: CGFloat = 175
-let armAngle: CGFloat = 32 * .pi / 180 // degrees from horizontal
-let armThickness: CGFloat = 100
+// The drawn content sits at x∈[1.5, 13.5], y∈[1.5, 14.8] of that 15pt canvas — centre THAT (not
+// the canvas), or the antenna's empty margin pushes the head visibly off-centre in the plate.
+let contentCentre = CGPoint(x: 7.5, y: 8.15)
+let originX = canvas / 2 - contentCentre.x * unit
+let originY = canvas / 2 - contentCentre.y * unit
+func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: originX + x * unit, y: originY + y * unit) }
+func r(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat) -> CGRect {
+    CGRect(origin: p(x, y), size: CGSize(width: w * unit, height: h * unit))
+}
 
-let upperEnd = CGPoint(x: apexX - armLength * cos(armAngle), y: midY + armLength * sin(armAngle))
-let lowerEnd = CGPoint(x: apexX - armLength * cos(armAngle), y: midY - armLength * sin(armAngle))
+// Silhouette: head + antenna stem + antenna tip, filled as one non-zero union.
+let head = CGMutablePath()
+head.addRoundedRect(in: r(1.5, 1.5, 12, 9.5), cornerWidth: 3 * unit, cornerHeight: 3 * unit)
+head.addRect(r(7, 10.6, 1, 1.9))
+head.addEllipse(in: r(6.1, 12, 2.8, 2.8))
+context.addPath(head)
+context.setFillColor(claudeOrange)
+context.fillPath()
 
-context.setLineCap(.round)
-context.setLineWidth(armThickness)
-context.setStrokeColor(claudeOrange)
-
-context.beginPath()
-context.move(to: CGPoint(x: apexX, y: midY))
-context.addLine(to: upperEnd)
-context.strokePath()
-
-context.beginPath()
-context.move(to: CGPoint(x: apexX, y: midY))
-context.addLine(to: lowerEnd)
-context.strokePath()
-
-// Cursor block, continuing the "> _" reading order to the right of the chevron's apex.
-let cursorWidth: CGFloat = 108
-let cursorHeight: CGFloat = 290
-let cursorGap: CGFloat = 78
-let cursorRect = CGRect(
-    x: apexX + cursorGap,
-    y: midY - cursorHeight / 2,
-    width: cursorWidth,
-    height: cursorHeight
-)
-let cursorRadius = cursorWidth * 0.32
-let cursorPath = CGPath(roundedRect: cursorRect, cornerWidth: cursorRadius, cornerHeight: cursorRadius, transform: nil)
-context.addPath(cursorPath)
+// Eyes — lit in the Codex accent, so both providers the app watches are present in the mark.
+let eyes = CGMutablePath()
+eyes.addEllipse(in: r(3.9, 5.1, 2.6, 2.6))
+eyes.addEllipse(in: r(8.5, 5.1, 2.6, 2.6))
+context.addPath(eyes)
 context.setFillColor(codexTeal)
+context.fillPath()
+
+// Mouth — knocked back to the plate colour so it reads as a cut-out of the head, exactly like the
+// menu-bar glyph punches it out with .destinationOut (here a real hole would punch the plate too).
+let mouth = CGPath(
+    roundedRect: r(5, 3, 5, 1.1),
+    cornerWidth: 0.55 * unit,
+    cornerHeight: 0.55 * unit,
+    transform: nil
+)
+context.addPath(mouth)
+context.setFillColor(plateColor)
 context.fillPath()
 
 guard let image = context.makeImage() else {
