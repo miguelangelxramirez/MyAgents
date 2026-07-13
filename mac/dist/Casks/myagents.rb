@@ -26,7 +26,9 @@ cask "myagents" do
   end
 
   auto_updates false
-  depends_on macos: ">= :tahoe" # macOS 26 — matches MACOSX_DEPLOYMENT_TARGET in mac/project.yml
+  # macOS 26 or newer — matches MACOSX_DEPLOYMENT_TARGET in mac/project.yml. A bare symbol IS the
+  # minimum-version form (the ">= :tahoe" string form warns as deprecated since Homebrew 6).
+  depends_on macos: :tahoe
 
   app "MyAgentsMac.app"
 
