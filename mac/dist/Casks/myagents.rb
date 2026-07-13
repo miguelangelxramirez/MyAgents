@@ -13,7 +13,7 @@
 #   brew install --cask ./mac/dist/Casks/myagents.rb   # local file install, no tap needed
 cask "myagents" do
   version "0.1.0"
-  sha256 "REPLACE_WITH_SHA256_FROM_build-release.sh"
+  sha256 "b3d27eaf0dbc6f536ffd6bcc1fdffa5c97178d394610273b5ba6c7ce6cd2b976"
 
   url "https://github.com/miguelangelxramirez/MyAgents/releases/download/v#{version}/MyAgentsMac-#{version}.zip"
   name "MyAgents"
