@@ -105,6 +105,22 @@ final class ProcessAncestryTests: XCTestCase {
         XCTAssertEqual(ProcessLiveness.classifyAncestry(pid: 100, in: map), .subagent(parentPid: 50))
     }
 
+    func testVersionNamedClaudeAncestor_recognizedByPid() {
+        // A modern Claude Code renames its process to its VERSION, so its `comm` ("2.1.207") isn't
+        // matched by `isAgentComm`. A `codex exec` subagent it spawned would then climb past it and
+        // read as a standalone interactive session (a duplicate tile). Passing the Claude's pid in
+        // `agentPids` folds the codex into it as a subagent instead.
+        let map = table([
+            (100, 50, "codex"),        // the `codex exec`
+            (50, 40, "zsh"),
+            (40, 1, "2.1.207"),        // the version-named Claude
+        ])
+        XCTAssertEqual(ProcessLiveness.classifyAncestry(pid: 100, in: map), .interactive,
+                       "without agentPids the version-named Claude is invisible → misread as interactive")
+        XCTAssertEqual(ProcessLiveness.classifyAncestry(pid: 100, in: map, agentPids: [40]), .subagent(parentPid: 40),
+                       "with the Claude's pid known, the codex exec folds into it")
+    }
+
     func testCodexCodeModeHost_isNotAnAgentAncestor() {
         // `codex-code-mode-host` is a Codex INTERNAL helper (a child of every interactive codex), not
         // a session. It must stay TRANSPARENT in an ancestry walk — otherwise a codex sitting under it

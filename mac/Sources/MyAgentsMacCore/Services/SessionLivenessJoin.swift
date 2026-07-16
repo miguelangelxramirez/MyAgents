@@ -37,8 +37,11 @@ public enum SessionLivenessJoin {
         // match + discovered rows below; subagents fold into a parent, orphans vanish.
         var interactive: [ProcessLiveness.DiscoveredProcess] = []
         var subagents: [(process: ProcessLiveness.DiscoveredProcess, parentPid: Int32)] = []
+        // Every discovered agent's pid, so an ancestor that renamed itself (a version-named Claude)
+        // is still recognized as the parent of a `codex exec` subagent — see `classifyAncestry`.
+        let agentPids = Set(liveProcesses.map(\.pid))
         for process in liveProcesses {
-            switch ProcessLiveness.classifyAncestry(pid: process.pid, in: processTable) {
+            switch ProcessLiveness.classifyAncestry(pid: process.pid, in: processTable, agentPids: agentPids) {
             case .interactive: interactive.append(process)
             case .subagent(let parentPid): subagents.append((process, parentPid))
             case .orphan: break // a phantom (app / ChatGPT subagent) — hidden entirely

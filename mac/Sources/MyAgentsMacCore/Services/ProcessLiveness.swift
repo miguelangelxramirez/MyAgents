@@ -226,14 +226,22 @@ public enum ProcessLiveness {
     /// `login`, `Terminal`, unknown intermediates) is transparent and we keep climbing. Reaching the
     /// top (pid ≤ 1, an unknown/missing ancestor, the depth cap, or a cycle) with no owner found
     /// means it's a genuine `.interactive` session.
-    static func classifyAncestry(pid: Int32, in table: [Int32: ProcessTableEntry]) -> ProcessAncestry {
+    ///
+    /// `agentPids` is the set of pids already CLASSIFIED as agents by discovery (path/argv — the
+    /// strong signals), used to recognize an ancestor whose `comm` alone gives it away: a modern
+    /// Claude Code renames its process to its VERSION ("2.1.207"), so `isAgentComm` can't spot it in
+    /// the table, and a `codex exec` subagent spawned by that Claude would otherwise climb straight
+    /// past it to Terminal and be misread as a standalone INTERACTIVE session — a duplicate tile,
+    /// with its own `codex-code-mode-host` counted as its "1 agent". Matching an ancestor by pid
+    /// folds it into that Claude instead. Empty (the default) preserves the old comm-only behavior.
+    static func classifyAncestry(pid: Int32, in table: [Int32: ProcessTableEntry], agentPids: Set<Int32> = []) -> ProcessAncestry {
         var current = table[pid]?.ppid ?? 0
         var visited: Set<Int32> = [pid]
         var depth = 0
         while current > 1, depth < maxAncestryDepth, !visited.contains(current) {
             visited.insert(current)
             guard let entry = table[current] else { return .interactive }
-            if isAgentComm(entry.comm) { return .subagent(parentPid: current) }
+            if agentPids.contains(current) || isAgentComm(entry.comm) { return .subagent(parentPid: current) }
             if isNonSessionOwner(entry.comm) { return .orphan }
             current = entry.ppid
             depth += 1
