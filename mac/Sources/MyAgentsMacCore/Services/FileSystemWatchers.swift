@@ -121,6 +121,13 @@ public final class FileTreeWatcher: @unchecked Sendable {
 
     private let lock = NSLock()
     private var stream: FSEventStreamRef?
+    private var isStopped = false
+    private var startRetries = 0
+    private let logger = Logger(subsystem: "com.miguelangelramirez.myagents.mac", category: "FileTreeWatcher")
+    /// How many times a failed `FSEventStreamStart` is retried before giving up (the reconcile safety
+    /// net still covers delivery meanwhile — see `SessionStore.reconcileInterval`).
+    private static let maxStartRetries = 3
+    private static let startRetryDelay: TimeInterval = 1
 
     /// - Parameter latency: how long FSEvents may coalesce events before delivering them. Apple's
     ///   guide is explicit that a larger latency is more efficient; 0.2s is far inside the ~0.5s
@@ -143,6 +150,7 @@ public final class FileTreeWatcher: @unchecked Sendable {
     public func start() {
         lock.lock()
         defer { lock.unlock() }
+        isStopped = false
         guard stream == nil else { return }
 
         var context = FSEventStreamContext(
@@ -156,16 +164,29 @@ public final class FileTreeWatcher: @unchecked Sendable {
         // FileEvents: report individual files, not just the containing directory — a rollout being
         // appended to lives several levels down. NoDefer: deliver the FIRST event of a burst
         // immediately (then coalesce), so the first sign of activity isn't delayed by `latency`.
+        // WatchRoot: also tell us when the watched root itself is moved/replaced/deleted, so a
+        // `~/.codex/sessions` swapped out from under us fires a RootChanged we can rebuild from,
+        // instead of silently watching a ghost inode forever (Codex audit LOW #9).
         let flags = UInt32(
             kFSEventStreamCreateFlagFileEvents
                 | kFSEventStreamCreateFlagNoDefer
+                | kFSEventStreamCreateFlagWatchRoot
         )
 
-        let callback: FSEventStreamCallback = { _, info, _, _, _, _ in
-            // Deliberately ignores the path/flag arrays: the watcher's only job is to say "something
-            // moved". The rescan it triggers is bounded and idempotent.
+        let callback: FSEventStreamCallback = { _, info, numEvents, _, eventFlags, _ in
+            // The watcher's only job is to say "something moved" — EXCEPT a RootChanged, which means
+            // the watched directory itself was replaced and this stream is now watching a dead inode.
             guard let info else { return }
-            Unmanaged<FileTreeWatcher>.fromOpaque(info).takeUnretainedValue().onChange()
+            let watcher = Unmanaged<FileTreeWatcher>.fromOpaque(info).takeUnretainedValue()
+            var rootChanged = false
+            for index in 0..<numEvents where eventFlags[index] & FSEventStreamEventFlags(kFSEventStreamEventFlagRootChanged) != 0 {
+                rootChanged = true
+            }
+            if rootChanged {
+                watcher.handleRootChanged()
+            } else {
+                watcher.onChange()
+            }
         }
 
         guard let created = FSEventStreamCreate(
@@ -177,18 +198,54 @@ public final class FileTreeWatcher: @unchecked Sendable {
             latency,
             flags
         ) else {
+            logger.error("FSEventStreamCreate failed for \(self.root.path, privacy: .public)")
             return
         }
 
         // `FSEventStreamScheduleWithRunLoop` is deprecated since macOS 13 — a dispatch queue is the
         // supported way to service the stream, and keeps this off the main thread.
         FSEventStreamSetDispatchQueue(created, queue)
-        FSEventStreamStart(created)
+        guard FSEventStreamStart(created) else {
+            // A started-but-failed stream delivers NOTHING; storing it anyway (as the old code did)
+            // silently disabled delivery. Tear it down and retry, bounded (Codex audit LOW #9).
+            FSEventStreamInvalidate(created)
+            FSEventStreamRelease(created)
+            logger.error("FSEventStreamStart failed for \(self.root.path, privacy: .public) (attempt \(self.startRetries + 1, privacy: .public))")
+            if startRetries < Self.maxStartRetries {
+                startRetries += 1
+                queue.asyncAfter(deadline: .now() + Self.startRetryDelay) { [weak self] in self?.retryStart() }
+            }
+            return
+        }
+        startRetries = 0
         stream = created
+    }
+
+    private func retryStart() {
+        lock.lock()
+        let stopped = isStopped
+        lock.unlock()
+        guard !stopped else { return }
+        start()
+    }
+
+    /// The watched root was moved/replaced/deleted (a RootChanged event). The current stream is bound
+    /// to the old inode and will never fire again, so rebuild by PATH. Deferred onto the (serial)
+    /// service queue so it runs AFTER the callback returns, never re-entrantly inside it.
+    private func handleRootChanged() {
+        logger.notice("watched root changed for \(self.root.path, privacy: .public) — rebuilding stream")
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.stop()
+            self.start()
+            // A rescan now: events between the old inode dying and the new stream arming were lost.
+            self.onChange()
+        }
     }
 
     public func stop() {
         lock.lock()
+        isStopped = true
         let current = stream
         stream = nil
         lock.unlock()

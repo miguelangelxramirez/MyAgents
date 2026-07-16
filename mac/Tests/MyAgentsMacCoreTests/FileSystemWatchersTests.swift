@@ -119,6 +119,38 @@ final class FileSystemWatchersTests: XCTestCase {
         wait(for: [fired], timeout: 10)
     }
 
+    /// Codex audit LOW #9: a start failure (or a missing root) must never crash and must leave the
+    /// watcher restartable — the old code stored a dead stream and silently disabled delivery. A
+    /// watcher pointed at a not-yet-existing root, started then stopped, must be safe.
+    func testFileTreeWatcher_missingRoot_doesNotCrash_andCanBeStoppedAndRestarted() {
+        let watcher = FileTreeWatcher(root: root.appendingPathComponent("no-such-root", isDirectory: true)) {}
+        watcher.start()
+        watcher.stop()
+        watcher.start() // restart after stop must not blow up
+        watcher.stop()
+    }
+
+    /// After a stop, a fresh start must arm a NEW working stream (proves stop/start don't leave the
+    /// watcher wedged — the same restart path RootChanged handling relies on).
+    func testFileTreeWatcher_restartAfterStop_deliversEventsAgain() throws {
+        let watcher = FileTreeWatcher(root: root, latency: 0.05) {}
+        watcher.start()
+        watcher.stop()
+
+        let fired = expectation(description: "restarted watcher fires")
+        fired.assertForOverFulfill = false
+        let watcher2 = FileTreeWatcher(root: root, latency: 0.05) { fired.fulfill() }
+        watcher2.start()
+        defer { watcher2.stop() }
+
+        Thread.sleep(forTimeInterval: 0.3)
+        let deep = root.appendingPathComponent("2026/07/16", isDirectory: true)
+        try FileManager.default.createDirectory(at: deep, withIntermediateDirectories: true)
+        try "x\n".write(to: deep.appendingPathComponent("rollout-restart.jsonl"), atomically: true, encoding: .utf8)
+
+        wait(for: [fired], timeout: 10)
+    }
+
     func testFileTreeWatcher_stop_silencesIt_andIsIdempotent() throws {
         let fired = expectation(description: "must NOT fire after stop")
         fired.isInverted = true
