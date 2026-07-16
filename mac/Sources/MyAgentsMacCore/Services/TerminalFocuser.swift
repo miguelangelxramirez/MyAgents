@@ -344,6 +344,12 @@ public enum TerminalFocusScript {
         }
     }
 
+    /// NOTE: the window is raised with `set frontmost of w to true` ALONE. An earlier version also
+    /// did `set index of w to 1` first — but on macOS 26 that silently fails to reorder (the window's
+    /// `index` stays put) AND leaves the window behind whichever one was already frontmost, so a
+    /// session in a non-front window would select its tab yet never come forward: only the session
+    /// whose window happened to be frontmost appeared to work (Miguel, 2026-07-16 — "solo abre una").
+    /// Verified on this machine: `frontmost` alone raises the correct window every time.
     private static func appleTerminalByTTY(tty: String) -> String {
         """
         tell application "Terminal"
@@ -356,7 +362,6 @@ public enum TerminalFocusScript {
         \t\t\tend try
         \t\t\tif td is "\(tty)" then
         \t\t\t\tset selected tab of w to t
-        \t\t\t\tset index of w to 1
         \t\t\t\tset frontmost of w to true
         \t\t\t\tset matched to true
         \t\t\t\texit repeat
@@ -440,7 +445,6 @@ public enum TerminalFocusScript {
         \t\t\t\tend try
         \t\t\t\tif tt is not missing value and \(condition) then
         \t\t\t\t\tset selected tab of w to t
-        \t\t\t\t\tset index of w to 1
         \t\t\t\t\tset frontmost of w to true
         \t\t\t\t\tset matched to true
         \t\t\t\t\texit repeat
