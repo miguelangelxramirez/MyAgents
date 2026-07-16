@@ -42,7 +42,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         model.refreshStatus()
         sessionStore.start()
-        usageStore.start()
+        // Usage polling is NOT started here: it's an opt-in feature (`showUsage`, off by default)
+        // and each refresh spawns `zsh -l` + `codex app-server`. `bindStores()` drives
+        // start/stop from the `showUsage` preference — whose `@Published` delivers its persisted
+        // value on subscription, so an install with usage enabled still starts on its own.
 
         logger.info("MyAgents menu bar launched — version \(BuildInfo.version, privacy: .public) (\(BuildInfo.buildDateDescription, privacy: .public))")
     }
@@ -129,9 +132,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .sink { [weak self] _ in self?.refreshGlyph() }
             .store(in: &cancellables)
 
+        // The `showUsage` toggle both gates the periodic usage polling (start it only while the
+        // feature is on — otherwise `zsh -l`/`codex app-server` would run every minute for a hidden
+        // section) AND drives the menu-bar badge. `@Published` delivers the persisted value on
+        // subscription, so this also performs the initial start/stop at launch.
         preferences.$showUsage
             .receive(on: RunLoop.main)
-            .sink { [weak self] _ in self?.refreshGlyph() }
+            .sink { [weak self] show in
+                guard let self else { return }
+                if show { self.usageStore.start() } else { self.usageStore.stop() }
+                self.refreshGlyph()
+            }
             .store(in: &cancellables)
 
         preferences.$menuBarUsageMetric
