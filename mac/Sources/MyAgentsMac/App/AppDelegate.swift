@@ -205,12 +205,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sessionStore.markSeen(session.id)
 
         let focuser = terminalFocuser
-        let terminalHost = session.terminalHost
-        let title = session.displayName
-        let titleTag = session.titleTag
         let id = session.id
+        // `focus(session:)` — not the field-by-field overload — so the session's `tty` is used:
+        // a Codex row (discovered by process, no hook title) has no matching tab title, only a tty,
+        // which selects its EXACT tab. Dropping it here is why those tiles wouldn't open.
         Task.detached { [weak self] in
-            let result = focuser.focus(terminalHost: terminalHost, title: title, titleTag: titleTag)
+            let result = focuser.focus(session: session)
             await self?.handleFocusResult(result, sessionID: id)
         }
     }
