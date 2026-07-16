@@ -52,6 +52,13 @@ public struct Session: Identifiable, Equatable, Sendable {
     /// non-empty string, so an empty value is a safe sentinel, never a legitimate title.
     public var displayName: String
 
+    /// Number of active SUBAGENTS nested under this session — the `codex exec` (and future
+    /// nested-agent) processes whose ancestry resolves to THIS session (see `SessionLivenessJoin`
+    /// + `ProcessLiveness.classifyAncestry`). Zero for a normal session. Drives the "N agents"
+    /// badge on the tile; a subagent never gets a tile of its own, so this is the only place its
+    /// presence shows.
+    public var subagentCount: Int
+
     public init(
         id: String,
         name: String = "",
@@ -68,7 +75,8 @@ public struct Session: Identifiable, Equatable, Sendable {
         terminalHost: String = "",
         titleTag: String = "",
         host: String = "",
-        displayName: String = ""
+        displayName: String = "",
+        subagentCount: Int = 0
     ) {
         self.id = id
         self.name = name
@@ -86,6 +94,7 @@ public struct Session: Identifiable, Equatable, Sendable {
         self.titleTag = titleTag
         self.host = host
         self.displayName = displayName
+        self.subagentCount = subagentCount
     }
 
     // MARK: - Derived flags (mirror `SessionState.cs`'s `NeedsAttention`/`IsBusy`/`IsStale`)

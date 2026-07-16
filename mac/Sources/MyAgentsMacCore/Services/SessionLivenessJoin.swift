@@ -18,12 +18,34 @@ import Foundation
 /// - Any session that's neither is DEAD → removed from the result.
 /// - A live process that matches no session row at all becomes a discovered idle row (the process
 ///   started before the app did, or its hook file hasn't landed yet).
+///
+/// Nesting (`processTable` non-empty): each live agent process is first classified by ancestry
+/// (`ProcessLiveness.classifyAncestry`). Only INTERACTIVE processes go through the rules above.
+/// A SUBAGENT process (a `codex exec` spawned by another session) never becomes a row — instead it
+/// bumps its PARENT session's `subagentCount`, resolved by the parent's pid (a discovered/pid-ful
+/// row) or, for pid-less Claude rows, by the parent process's own provider+cwd. An ORPHAN (owned by
+/// the app itself or ChatGPT) is dropped entirely. With an EMPTY `processTable` every process
+/// classifies as interactive, so the pre-nesting behavior is exactly preserved.
 public enum SessionLivenessJoin {
     public static func join(
         sessions: [Session],
         liveProcesses: [ProcessLiveness.DiscoveredProcess],
+        processTable: [Int32: ProcessLiveness.ProcessTableEntry] = [:],
         isAlive: (Int32) -> Bool = ProcessLiveness.isAlive
     ) -> [Session] {
+        // Split the live processes by ancestry. Only interactive processes drive the open-session
+        // match + discovered rows below; subagents fold into a parent, orphans vanish.
+        var interactive: [ProcessLiveness.DiscoveredProcess] = []
+        var subagents: [(process: ProcessLiveness.DiscoveredProcess, parentPid: Int32)] = []
+        for process in liveProcesses {
+            switch ProcessLiveness.classifyAncestry(pid: process.pid, in: processTable) {
+            case .interactive: interactive.append(process)
+            case .subagent(let parentPid): subagents.append((process, parentPid))
+            case .orphan: break // a phantom (app / ChatGPT subagent) — hidden entirely
+            }
+        }
+        let liveProcesses = interactive
+
         let liveKeys = Set(liveProcesses.map { key(provider: $0.provider, cwd: $0.cwd) })
 
         let openSessions = sessions.filter { session in
@@ -66,7 +88,47 @@ public enum SessionLivenessJoin {
                 )
             }
 
-        return liveSessions + discovered
+        return applyingSubagentCounts(to: liveSessions + discovered, subagents: subagents, interactive: interactive)
+    }
+
+    /// Folds each subagent process into its parent session's `subagentCount`, without adding any
+    /// row for the subagent itself. A subagent resolves to a parent row by, in order:
+    ///  1. `ownerPid == parentPid` — the parent is a pid-ful / discovered row (a Codex session, or
+    ///     any process-discovered row).
+    ///  2. the parent PROCESS's own (provider, cwd) matching a PID-LESS row's key — the macOS-Claude
+    ///     case, where hooks can't record a pid so the parent session row has `ownerPid == nil` and
+    ///     is matched by provider+cwd (the parent process is looked up in `interactive` by pid).
+    /// A subagent whose parent resolves to neither is dropped (counted nowhere) — same fate as an
+    /// orphan: better to hide a phantom than to attach it to the wrong session.
+    private static func applyingSubagentCounts(
+        to rows: [Session],
+        subagents: [(process: ProcessLiveness.DiscoveredProcess, parentPid: Int32)],
+        interactive: [ProcessLiveness.DiscoveredProcess]
+    ) -> [Session] {
+        guard !subagents.isEmpty else { return rows }
+
+        var indexByOwnerPid: [Int32: Int] = [:]
+        var indexByKey: [String: Int] = [:]
+        for (i, row) in rows.enumerated() {
+            if let pid = row.ownerPid {
+                indexByOwnerPid[pid] = i
+            } else {
+                indexByKey[key(provider: row.provider, cwd: row.cwd)] = i
+            }
+        }
+        let processByPid = Dictionary(interactive.map { ($0.pid, $0) }, uniquingKeysWith: { first, _ in first })
+
+        var rows = rows
+        for (_, parentPid) in subagents {
+            if let i = indexByOwnerPid[parentPid] {
+                rows[i].subagentCount += 1
+            } else if let parent = processByPid[parentPid],
+                      let i = indexByKey[key(provider: parent.provider, cwd: parent.cwd)] {
+                rows[i].subagentCount += 1
+            }
+            // else: parent isn't a visible row → drop the subagent (count it nowhere).
+        }
+        return rows
     }
 
     /// Keeps every pid-ful session, but for pid-less ones sharing a (provider, cwd) key keeps only

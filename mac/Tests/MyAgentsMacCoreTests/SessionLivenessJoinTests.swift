@@ -183,4 +183,104 @@ final class SessionLivenessJoinTests: XCTestCase {
         XCTAssertFalse(result.contains { $0.id == "dead-cwd" })
         XCTAssertTrue(result.contains { $0.ownerPid == 9 }, "the unclaimed live process must show up as discovered")
     }
+
+    // MARK: - Subagent nesting (the "phantom codex tile" fix)
+
+    private func entry(_ ppid: Int32, _ comm: String) -> ProcessLiveness.ProcessTableEntry {
+        ProcessLiveness.ProcessTableEntry(ppid: ppid, comm: comm)
+    }
+
+    func testSubagent_incrementsParentDiscoveredRow_andAddsNoRowOfItsOwn() {
+        // codex(100) ← zsh(150) ← codex(200 = the parent session, itself interactive). The parent
+        // is a process-discovered row (ownerPid 200); the subagent folds into it, no tile of its own.
+        let parent = process(pid: 200, provider: .codex, cwd: "/proj")
+        let subagent = process(pid: 100, provider: .codex, cwd: "/proj")
+        let table: [Int32: ProcessLiveness.ProcessTableEntry] = [
+            100: entry(150, "codex"),
+            150: entry(200, "zsh"),
+            200: entry(1, "codex"),
+        ]
+
+        let result = SessionLivenessJoin.join(sessions: [], liveProcesses: [parent, subagent], processTable: table, isAlive: { _ in false })
+
+        XCTAssertEqual(result.map(\.ownerPid), [200], "only the parent is a row — the subagent is not")
+        XCTAssertEqual(result.first?.subagentCount, 1)
+        XCTAssertFalse(result.contains { $0.ownerPid == 100 }, "the codex exec subagent must never surface as its own tile")
+    }
+
+    func testSubagent_resolvesParentByPidlessProviderAndCwd() {
+        // The macOS-Claude case: the parent session row is PID-LESS (hooks can't record a pid),
+        // matched by provider+cwd. The subagent's parent process (claude 200 at /proj) must resolve
+        // to that row and bump it.
+        let claudeRow = Session(id: "s1", cwd: "/proj", provider: .claude, ownerPid: nil)
+        let parent = process(pid: 200, provider: .claude, cwd: "/proj")
+        let subagent = process(pid: 100, provider: .codex, cwd: "/proj")
+        let table: [Int32: ProcessLiveness.ProcessTableEntry] = [
+            100: entry(150, "codex"),
+            150: entry(200, "zsh"),
+            200: entry(180, "claude"),
+            180: entry(1, "Terminal"),
+        ]
+
+        let result = SessionLivenessJoin.join(sessions: [claudeRow], liveProcesses: [parent, subagent], processTable: table, isAlive: { _ in false })
+
+        XCTAssertEqual(result.map(\.id), ["s1"], "the pid-less claude session is the only row")
+        XCTAssertEqual(result.first?.subagentCount, 1)
+        XCTAssertFalse(result.contains { $0.ownerPid == 100 }, "the subagent must not be a row")
+    }
+
+    func testTwoSubagentsUnderOneParent_countTwo() {
+        let parent = process(pid: 200, provider: .codex, cwd: "/proj")
+        let sub1 = process(pid: 100, provider: .codex, cwd: "/proj")
+        let sub2 = process(pid: 101, provider: .codex, cwd: "/proj")
+        let table: [Int32: ProcessLiveness.ProcessTableEntry] = [
+            100: entry(200, "codex"),
+            101: entry(200, "codex"),
+            200: entry(1, "codex"),
+        ]
+
+        let result = SessionLivenessJoin.join(sessions: [], liveProcesses: [parent, sub1, sub2], processTable: table, isAlive: { _ in false })
+
+        XCTAssertEqual(result.map(\.ownerPid), [200])
+        XCTAssertEqual(result.first?.subagentCount, 2)
+    }
+
+    func testOrphanSubagent_isDroppedEntirely() {
+        // codex(100) ← MyAgentsMac(50): the app's own usage helper — no row, counted nowhere.
+        let orphan = process(pid: 100, provider: .codex, cwd: "/proj")
+        let table: [Int32: ProcessLiveness.ProcessTableEntry] = [
+            100: entry(50, "codex"),
+            50: entry(1, "MyAgentsMac"),
+        ]
+
+        let result = SessionLivenessJoin.join(sessions: [], liveProcesses: [orphan], processTable: table, isAlive: { _ in false })
+
+        XCTAssertTrue(result.isEmpty, "an app-owned orphan codex must be hidden completely")
+    }
+
+    func testInteractiveProcess_stillBecomesADiscoveredRow_withNoSubagentCount() {
+        // codex(100) ← zsh(90) ← Terminal(1): a genuine standalone session — a normal tile, count 0.
+        let interactive = process(pid: 100, provider: .codex, cwd: "/proj")
+        let table: [Int32: ProcessLiveness.ProcessTableEntry] = [
+            100: entry(90, "zsh"),
+            90: entry(1, "Terminal"),
+        ]
+
+        let result = SessionLivenessJoin.join(sessions: [], liveProcesses: [interactive], processTable: table, isAlive: { _ in false })
+
+        XCTAssertEqual(result.map(\.ownerPid), [100])
+        XCTAssertEqual(result.first?.subagentCount, 0)
+    }
+
+    func testEmptyProcessTable_preservesExactlyThePreNestingBehavior() {
+        // With no ancestry map every process is interactive — the join must behave identically to
+        // before nesting existed (default-arg path, exercised by every legacy test above).
+        let a = process(pid: 100, provider: .codex, cwd: "/proj-a")
+        let b = process(pid: 200, provider: .claude, cwd: "/proj-b")
+
+        let result = SessionLivenessJoin.join(sessions: [], liveProcesses: [a, b], isAlive: { _ in false })
+
+        XCTAssertEqual(Set(result.map(\.ownerPid)), [100, 200])
+        XCTAssertTrue(result.allSatisfy { $0.subagentCount == 0 })
+    }
 }

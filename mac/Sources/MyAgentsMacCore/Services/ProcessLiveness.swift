@@ -33,13 +33,44 @@ public enum ProcessLiveness {
         public let cwd: String
         /// Best-effort resolved executable path. Empty when `proc_pidpath` failed.
         public let executablePath: String
+        /// Parent process id (`pbi_ppid`), read from the SAME `PROC_PIDTBSDINFO` fetch that gives
+        /// the short name — never a second syscall (energy law). `0` when the `bsdInfo` fetch
+        /// failed (e.g. a process owned by another user). Used by `classifyAncestry` to tell a
+        /// standalone interactive session apart from a nested subagent / orphan.
+        public let ppid: Int32
 
-        public init(pid: Int32, provider: Provider, cwd: String, executablePath: String) {
+        public init(pid: Int32, provider: Provider, cwd: String, executablePath: String, ppid: Int32 = 0) {
             self.pid = pid
             self.provider = provider
             self.cwd = cwd
             self.executablePath = executablePath
+            self.ppid = ppid
         }
+    }
+
+    /// One row of the whole-process-table ancestry map: a pid's parent and its short `comm` name.
+    /// A tiny value type (not a raw tuple) so the map is trivially `Sendable` when threaded through
+    /// `SessionStore`'s off-main scan closure.
+    public struct ProcessTableEntry: Equatable, Sendable {
+        public let ppid: Int32
+        public let comm: String
+
+        public init(ppid: Int32, comm: String) {
+            self.ppid = ppid
+            self.comm = comm
+        }
+    }
+
+    /// How an agent process relates to the session tree, decided purely from ancestry.
+    /// - `interactive`: a genuine standalone session (its ancestry reaches a login shell / Terminal
+    ///   / launchd without passing through another agent or a non-session owner) — keep as a tile.
+    /// - `subagent(parentPid)`: nested under another tracked AGENT process — fold into that parent
+    ///   session's count, never a tile of its own.
+    /// - `orphan`: owned by the app itself or ChatGPT — a phantom, hidden entirely.
+    public enum ProcessAncestry: Equatable, Sendable {
+        case interactive
+        case subagent(parentPid: Int32)
+        case orphan
     }
 
     /// `true` iff a process with this pid exists right now.
@@ -58,6 +89,66 @@ public enum ProcessLiveness {
     /// or it exited mid-scan) is skipped, not fatal to the whole scan.
     public static func discoverAgentProcesses() -> [DiscoveredProcess] {
         pids().compactMap(classify(pid:))
+    }
+
+    /// Builds the whole-process-table ancestry map: `pid → (ppid, comm)` for every live process,
+    /// best-effort. This is the WHOLE table (not just agents) because `classifyAncestry` has to
+    /// walk through transparent ancestors (shells, `login`, `Terminal`) that aren't agents.
+    ///
+    /// Energy: this is a cheap pass — one `PROC_PIDTBSDINFO` per pid and nothing else (no
+    /// `proc_pidpath`/`sysctl`), the same single `proc_pidinfo` call `discoverAgentProcesses`
+    /// already makes per pid, reused here for its `pbi_ppid`.
+    public static func processTable() -> [Int32: ProcessTableEntry] {
+        var table: [Int32: ProcessTableEntry] = [:]
+        for pid in pids() {
+            guard let bsd = bsdInfo(pid: pid) else { continue }
+            table[Int32(pid)] = ProcessTableEntry(ppid: bsd.ppid, comm: bsd.name)
+        }
+        return table
+    }
+
+    // MARK: - Ancestry classification (pure — synthetic tables, no real processes)
+
+    /// Comm names, and a max walk depth, that make `classifyAncestry` a pure function of the map.
+    private static let maxAncestryDepth = 64
+
+    /// A tracked AGENT ancestor — the thing that makes a codex/claude a SUBAGENT rather than a
+    /// standalone session. Recognized by `comm` alone (cheap): `claude`, `codex`, `codex-*`.
+    static func isAgentComm(_ comm: String) -> Bool {
+        let name = comm.lowercased()
+        return name == "claude" || name == "codex" || name.hasPrefix("codex-")
+    }
+
+    /// A non-session owner — an ancestor that owns the process but is NOT a session: the app's own
+    /// usage helper (`MyAgentsMac`) or ChatGPT.app. Case-insensitive, suffixes allowed
+    /// (`ChatGPT Helper`, etc.). Hitting one of these means the process is an ORPHAN → hidden.
+    static func isNonSessionOwner(_ comm: String) -> Bool {
+        let name = comm.lowercased()
+        return name.hasPrefix("myagentsmac") || name.hasPrefix("chatgpt")
+    }
+
+    /// Walks a discovered agent process's ancestry through the whole-table map to classify it.
+    /// Pure: takes the synthetic-friendly `[pid: (ppid, comm)]` map, spawns nothing.
+    ///
+    /// The walk starts at the process's PARENT (its own comm is irrelevant — it's already known to
+    /// be an agent) and climbs: the FIRST ancestor that is another agent wins as the parent session
+    /// (`.subagent`); the first that is the app / ChatGPT wins as `.orphan`; anything else (shells,
+    /// `login`, `Terminal`, unknown intermediates) is transparent and we keep climbing. Reaching the
+    /// top (pid ≤ 1, an unknown/missing ancestor, the depth cap, or a cycle) with no owner found
+    /// means it's a genuine `.interactive` session.
+    static func classifyAncestry(pid: Int32, in table: [Int32: ProcessTableEntry]) -> ProcessAncestry {
+        var current = table[pid]?.ppid ?? 0
+        var visited: Set<Int32> = [pid]
+        var depth = 0
+        while current > 1, depth < maxAncestryDepth, !visited.contains(current) {
+            visited.insert(current)
+            guard let entry = table[current] else { return .interactive }
+            if isAgentComm(entry.comm) { return .subagent(parentPid: current) }
+            if isNonSessionOwner(entry.comm) { return .orphan }
+            current = entry.ppid
+            depth += 1
+        }
+        return .interactive
     }
 
     // MARK: - Enumeration
@@ -80,7 +171,11 @@ public enum ProcessLiveness {
     // MARK: - Classification
 
     private static func classify(pid: pid_t) -> DiscoveredProcess? {
-        let shortName = processName(pid: pid) ?? ""
+        // ONE `PROC_PIDTBSDINFO` fetch gives BOTH the short name and the parent pid (energy law:
+        // no second syscall for `ppid`).
+        let bsd = bsdInfo(pid: pid)
+        let shortName = bsd?.name ?? ""
+        let ppid = bsd?.ppid ?? 0
         let executablePath = executablePath(pid: pid) ?? ""
         let executableBase = (executablePath as NSString).lastPathComponent
 
@@ -96,7 +191,7 @@ public enum ProcessLiveness {
         guard let provider = provider(name: shortName, executablePath: executablePath, arguments: arguments) else {
             return nil
         }
-        return DiscoveredProcess(pid: pid, provider: provider, cwd: cwd(pid: pid) ?? "", executablePath: executablePath)
+        return DiscoveredProcess(pid: pid, provider: provider, cwd: cwd(pid: pid) ?? "", executablePath: executablePath, ppid: ppid)
     }
 
     private static func isScriptHost(_ name: String) -> Bool {
@@ -148,11 +243,16 @@ public enum ProcessLiveness {
 
     // MARK: - Per-pid introspection (all best-effort: return nil on any failure)
 
-    private static func processName(pid: pid_t) -> String? {
+    /// The short `comm` name AND parent pid from ONE `PROC_PIDTBSDINFO` fetch. Both callers
+    /// (`classify` for discovery, `processTable` for the ancestry map) go through here, so `pbi_ppid`
+    /// never costs a syscall of its own (energy law). `nil` on any failure (e.g. another user's
+    /// process), which callers treat as name `""` / ppid `0`.
+    private static func bsdInfo(pid: pid_t) -> (name: String, ppid: Int32)? {
         var info = proc_bsdinfo()
         let size = Int32(MemoryLayout<proc_bsdinfo>.size)
         guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
-        return nulTerminatedCString(from: &info.pbi_name)
+        let name = nulTerminatedCString(from: &info.pbi_name)
+        return (name: name, ppid: Int32(bitPattern: info.pbi_ppid))
     }
 
     private static func executablePath(pid: pid_t) -> String? {

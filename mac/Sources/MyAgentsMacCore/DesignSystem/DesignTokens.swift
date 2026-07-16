@@ -142,6 +142,10 @@ public enum DesignTokens {
         public static let usageBarHeight: CGFloat = 5
         /// Pending / activity dot.
         public static let dotSize: CGFloat = 7
+        /// Vertical inset inside a small pill/badge (the "N agents" subagent badge). Not on the 8pt
+        /// gap grid — a component inset, like the other Metrics here; the horizontal inset reuses
+        /// `Spacing.xxs`.
+        public static let badgePaddingVertical: CGFloat = 2
         /// Menu-bar glyph point size (drawn into the status item image).
         public static let glyphPointSize: CGFloat = 15
         /// Font size of the composed "% badge" text drawn next to the menu-bar glyph.

@@ -20,6 +20,11 @@ public final class SessionStore: ObservableObject {
 
     private let scanner: SessionScanner
     private let discoverProcesses: @Sendable () -> [ProcessLiveness.DiscoveredProcess]
+    /// The whole-process-table ancestry map (`pid → (ppid, comm)`) captured in the SAME scan moment
+    /// as `discoverProcesses`, so `SessionLivenessJoin` can nest `codex exec` subagents under their
+    /// parent session instead of surfacing them as clickable phantom tiles. Injectable so tests
+    /// drive synthetic ancestry without spawning a process tree.
+    private let processTable: @Sendable () -> [Int32: ProcessLiveness.ProcessTableEntry]
     private let transcriptTitle: TranscriptTitle
     /// Enriches Codex rows (name, and best-effort state) from Codex's own rollout transcripts —
     /// Codex has no reliable hook mechanism on macOS, so without this a Codex session only ever
@@ -78,6 +83,7 @@ public final class SessionStore: ObservableObject {
         coalesceInterval: TimeInterval = 0.08,
         reconcileInterval: TimeInterval = 5,
         discoverProcesses: @escaping @Sendable () -> [ProcessLiveness.DiscoveredProcess] = { ProcessLiveness.discoverAgentProcesses() },
+        processTable: @escaping @Sendable () -> [Int32: ProcessLiveness.ProcessTableEntry] = { ProcessLiveness.processTable() },
         transcriptTitle: TranscriptTitle = TranscriptTitle(),
         codexSessionScanner: CodexSessionScanner = CodexSessionScanner()
     ) {
@@ -85,6 +91,7 @@ public final class SessionStore: ObservableObject {
         self.coalesceInterval = coalesceInterval
         self.reconcileInterval = reconcileInterval
         self.discoverProcesses = discoverProcesses
+        self.processTable = processTable
         self.transcriptTitle = transcriptTitle
         self.codexSessionScanner = codexSessionScanner
     }
@@ -104,7 +111,7 @@ public final class SessionStore: ObservableObject {
     public func refresh() {
         codexSessionScanner.scanRecentSessions()
         let scanned = Self.resolvingDisplayNames(scanner.scanSessions(), transcriptTitle: transcriptTitle, codexSessionScanner: codexSessionScanner)
-        apply(scanned: scanned, processes: discoverProcesses())
+        apply(scanned: scanned, processes: discoverProcesses(), processTable: processTable())
     }
 
     /// Starts watching. NOT a poll loop.
@@ -169,6 +176,7 @@ public final class SessionStore: ObservableObject {
     private func pollOnce() async {
         let scanner = self.scanner
         let discoverProcesses = self.discoverProcesses
+        let processTable = self.processTable
         let transcriptTitle = self.transcriptTitle
         let codexSessionScanner = self.codexSessionScanner
         // Disk hygiene is time-based, not scan-based: rescans are now event-driven, so counting them
@@ -177,7 +185,7 @@ public final class SessionStore: ObservableObject {
         let shouldReap = lastReapAt.map { now.timeIntervalSince($0) >= reapInterval } ?? true
         if shouldReap { lastReapAt = now }
         let staleFileThreshold = self.staleFileThreshold
-        let (scanned, processes) = await Task.detached {
+        let scanned = await Task.detached {
             // Off-main: drop long-abandoned orphan files before this scan so they neither reach the
             // join nor keep piling up (see `SessionScanner.reapStaleFiles`).
             if shouldReap { scanner.reapStaleFiles(olderThan: staleFileThreshold) }
@@ -187,9 +195,11 @@ public final class SessionStore: ObservableObject {
             codexSessionScanner.scanRecentSessions()
             let raw = scanner.scanSessions()
             let resolved = Self.resolvingDisplayNames(raw, transcriptTitle: transcriptTitle, codexSessionScanner: codexSessionScanner)
-            return (resolved, discoverProcesses())
+            // Capture the agent list AND the whole-table ancestry map in the SAME off-main scan
+            // moment — the join needs both to nest subagents against a consistent snapshot.
+            return (resolved, discoverProcesses(), processTable())
         }.value
-        apply(scanned: scanned, processes: processes)
+        apply(scanned: scanned.0, processes: scanned.1, processTable: scanned.2)
     }
 
     /// Reads each session's transcript (if any) for its AI-authored title, enriches a nameless
@@ -218,8 +228,8 @@ public final class SessionStore: ObservableObject {
         return codexSessionScanner.name(forCwd: session.cwd) ?? session.name
     }
 
-    private func apply(scanned: [Session], processes: [ProcessLiveness.DiscoveredProcess]) {
-        let joined = SessionLivenessJoin.join(sessions: scanned, liveProcesses: processes)
+    private func apply(scanned: [Session], processes: [ProcessLiveness.DiscoveredProcess], processTable: [Int32: ProcessLiveness.ProcessTableEntry]) {
+        let joined = SessionLivenessJoin.join(sessions: scanned, liveProcesses: processes, processTable: processTable)
         // Discovered rows (a live process with no hook file at all) never went through
         // `resolvingDisplayNames` above — resolve them here too. For a Codex discovered row, also
         // pull in this poll's rollout-derived state/label/timing (`latestSession(forCwd:)`) before

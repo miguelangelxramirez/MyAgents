@@ -124,8 +124,39 @@ struct SessionTileView: View {
                 .minimumScaleFactor(0.7)
                 .truncationMode(.tail)
 
-            Spacer(minLength: 0)
+            Spacer(minLength: DesignTokens.Spacing.xxs)
+
+            subagentBadge
         }
+    }
+
+    /// A small, tasteful pill on the state line — "2 agents" / "2 agentes" — shown only when this
+    /// session has active subagents nested under it (a delegated `codex exec`; see
+    /// `SessionLivenessJoin`). Neutral track fill + provider-tinted text so it reads as belonging to
+    /// the session without shouting; hidden entirely when there are none. `fixedSize` keeps it from
+    /// being squeezed by the shrinking state label to its left.
+    @ViewBuilder
+    private var subagentBadge: some View {
+        if session.subagentCount > 0 {
+            Text(subagentBadgeText)
+                .font(DesignTokens.Typography.sectionHeader)
+                .foregroundStyle(providerColor)
+                .padding(.horizontal, DesignTokens.Spacing.xxs)
+                .padding(.vertical, DesignTokens.Metrics.badgePaddingVertical)
+                .background(Capsule().fill(DesignTokens.Colors.usageTrack))
+                .overlay(Capsule().strokeBorder(DesignTokens.Colors.hairline, lineWidth: 1))
+                .fixedSize()
+                .accessibilityHidden(true)
+        }
+    }
+
+    /// The localized, plural-correct badge string (resolves the xcstrings plural variation for the
+    /// count). Computed as a `String` so the same value can feed both the visible pill and the tile's
+    /// combined accessibility label.
+    private var subagentBadgeText: String {
+        // Single-arg `LocalizationValue` form: the interpolated `%lld` key resolves the plural
+        // variation defined in `Localizable.xcstrings` (`session.subagentCount %lld`).
+        String(localized: "session.subagentCount \(session.subagentCount)")
     }
 
     @ViewBuilder
@@ -192,8 +223,9 @@ struct SessionTileView: View {
     }
 
     private var accessibilityLabel: String {
-        session.folder.isEmpty
+        let base = session.folder.isEmpty
             ? "\(displayName), \(session.state.localizedLabel)"
             : "\(displayName), \(session.folder), \(session.state.localizedLabel)"
+        return session.subagentCount > 0 ? "\(base), \(subagentBadgeText)" : base
     }
 }
