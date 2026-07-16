@@ -89,8 +89,18 @@ public final class SessionStore: ObservableObject {
         self.codexSessionScanner = codexSessionScanner
     }
 
+    /// Kicks a single off-main rescan and returns immediately — for the moment the popover opens,
+    /// when we want fresh data but must NOT stall AppKit. Unlike `refresh()`, the actual scan +
+    /// process-table discovery run inside `pollOnce`'s `Task.detached` hop, so the click returns at
+    /// once and the list updates a beat later (the popover already shows the live `sessions` value
+    /// meanwhile). This replaces the synchronous per-open scans that blocked the main actor —
+    /// twice, since `onAppear` repeated the click's scan (Codex audit, 2026-07-16).
+    public func refreshSoon() {
+        Task { [weak self] in await self?.pollOnce() }
+    }
+
     /// One-shot synchronous scan+join+order on the calling thread/actor. Useful for previews, tests,
-    /// and the moment the popover opens; the live app is otherwise driven by `start()`.
+    /// and the one-time initial populate in `start()`; the live app is otherwise driven by watchers.
     public func refresh() {
         codexSessionScanner.scanRecentSessions()
         let scanned = Self.resolvingDisplayNames(scanner.scanSessions(), transcriptTitle: transcriptTitle, codexSessionScanner: codexSessionScanner)

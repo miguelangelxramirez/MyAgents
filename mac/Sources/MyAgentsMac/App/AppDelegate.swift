@@ -171,7 +171,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if popover.isShown {
             popover.performClose(nil)
         } else {
-            sessionStore.refresh()
+            // Off-main rescan: don't block the click (and don't scan twice — `onAppear` no longer
+            // rescans). The popover shows the live `sessions` immediately; the fresh scan lands a
+            // beat later.
+            sessionStore.refreshSoon()
             model.refreshStatus()
             NSApp.activate(ignoringOtherApps: true)
             mountPopoverContent(popover)

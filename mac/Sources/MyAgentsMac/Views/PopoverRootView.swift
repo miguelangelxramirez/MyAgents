@@ -33,7 +33,9 @@ struct PopoverRootView: View {
         .frame(width: DesignTokens.Metrics.popoverWidth)
         .background(VisualEffectBackground())
         .onAppear {
-            sessionStore.refresh()
+            // No session rescan here: opening the popover already kicks one off-main
+            // (`AppDelegate.togglePopover` → `refreshSoon`). A second synchronous `refresh()` on the
+            // main actor was the audit's "scans twice on open" (2026-07-16).
             model.refreshStatus()
         }
     }
