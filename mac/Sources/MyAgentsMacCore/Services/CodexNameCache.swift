@@ -17,8 +17,18 @@ public final class CodexNameCache: @unchecked Sendable {
     private let lock = NSLock()
     private var namesByCwd: [String: String] = [:]
     private var idsByCwd: [String: Set<String>] = [:]
+    /// cwd keys in least-recently-recorded order (front = oldest). Bounds the cache so it can't grow
+    /// for every rollout the machine has ever produced across one long-running app session (Codex
+    /// audit MED #7) — an evicted cwd simply pays for one more header read if it comes back.
+    private var recency: [String] = []
+    private let maxEntries: Int
 
-    public init() {}
+    /// - Parameter maxEntries: hard cap on how many distinct cwds are remembered. The oldest is
+    ///   evicted past this. Default is generous — a real machine has far fewer active project folders
+    ///   than this, so eviction only ever bites a pathological history.
+    public init(maxEntries: Int = 512) {
+        self.maxEntries = max(maxEntries, 1)
+    }
 
     /// Records one freshly-scanned rollout session's (cwd, sessionId, name). Recording the same
     /// `sessionId` again (e.g. the same session seen on a later poll) is a no-op for the
@@ -42,6 +52,19 @@ public final class CodexNameCache: @unchecked Sendable {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedName.isEmpty {
             namesByCwd[key] = trimmedName
+        }
+        touchAndEvict(key)
+    }
+
+    /// Moves `key` to the most-recent end and evicts the oldest cwds once the cap is exceeded.
+    /// Callers already hold `lock`.
+    private func touchAndEvict(_ key: String) {
+        if let index = recency.firstIndex(of: key) { recency.remove(at: index) }
+        recency.append(key)
+        while recency.count > maxEntries {
+            let evicted = recency.removeFirst()
+            namesByCwd[evicted] = nil
+            idsByCwd[evicted] = nil
         }
     }
 

@@ -51,6 +51,14 @@ public final class SessionStore: ObservableObject {
     private let reconcileInterval: TimeInterval
     private var reconcileTask: Task<Void, Never>?
     private var coalesceTask: Task<Void, Never>?
+    /// Monotonic scan generation. A coalesced rescan and the reconcile safety net both drive
+    /// `pollOnce`, whose actual scan runs in a detached task; cancelling `coalesceTask` does NOT stop
+    /// an already-running detached scan. Without ordering, a SLOW scan A could finish after a newer
+    /// scan B and republish B's newer snapshot with A's older one — a false permission pulse until
+    /// the next reconcile (Codex audit MED #4). Each scan request takes the next generation at its
+    /// (main-actor, serialized) start; `apply` publishes only the newest generation seen so far.
+    private var scanGeneration: UInt64 = 0
+    private var lastAppliedGeneration: UInt64 = 0
     private var sessionsWatcher: DirectoryWatcher?
     private var rolloutsWatcher: FileTreeWatcher?
     /// When the stale-file reap last ran. It's disk hygiene, so it runs on a wall-clock beat rather
@@ -109,9 +117,26 @@ public final class SessionStore: ObservableObject {
     /// One-shot synchronous scan+join+order on the calling thread/actor. Useful for previews, tests,
     /// and the one-time initial populate in `start()`; the live app is otherwise driven by watchers.
     public func refresh() {
+        let generation = nextGeneration()
         codexSessionScanner.scanRecentSessions()
         let scanned = Self.resolvingDisplayNames(scanner.scanSessions(), transcriptTitle: transcriptTitle, codexSessionScanner: codexSessionScanner)
-        apply(scanned: scanned, processes: discoverProcesses(), processTable: processTable())
+        apply(scanned: scanned, processes: discoverProcesses(), processTable: processTable(), generation: generation)
+    }
+
+    /// The next scan generation. Called at the START of each scan request, on the main actor, so
+    /// generations are handed out in request order.
+    private func nextGeneration() -> UInt64 {
+        scanGeneration &+= 1
+        return scanGeneration
+    }
+
+    /// Whether a scan tagged `generation` is still the newest to reach `apply`. Records it as applied
+    /// when so; a lower generation arriving later (a slow scan that lost the race) is dropped. Kept
+    /// internal so the out-of-order guard can be tested directly (Codex audit MED #4).
+    func shouldApply(generation: UInt64) -> Bool {
+        guard generation > lastAppliedGeneration else { return false }
+        lastAppliedGeneration = generation
+        return true
     }
 
     /// Starts watching. NOT a poll loop.
@@ -174,6 +199,10 @@ public final class SessionStore: ObservableObject {
 
 
     private func pollOnce() async {
+        // Take this scan's generation NOW, before the detached hop — the value reflects request
+        // order, so a scan requested later always outranks one requested earlier even if it finishes
+        // first (Codex audit MED #4).
+        let generation = nextGeneration()
         let scanner = self.scanner
         let discoverProcesses = self.discoverProcesses
         let processTable = self.processTable
@@ -199,7 +228,7 @@ public final class SessionStore: ObservableObject {
             // moment — the join needs both to nest subagents against a consistent snapshot.
             return (resolved, discoverProcesses(), processTable())
         }.value
-        apply(scanned: scanned.0, processes: scanned.1, processTable: scanned.2)
+        apply(scanned: scanned.0, processes: scanned.1, processTable: scanned.2, generation: generation)
     }
 
     /// Reads each session's transcript (if any) for its AI-authored title, enriches a nameless
@@ -207,7 +236,10 @@ public final class SessionStore: ObservableObject {
     /// resolves the final row title via `SessionDisplayName.resolve`. Static + only `Sendable`
     /// captures so this can run inside `Task.detached` without touching the main actor.
     nonisolated private static func resolvingDisplayNames(_ sessions: [Session], transcriptTitle: TranscriptTitle, codexSessionScanner: CodexSessionScanner) -> [Session] {
-        sessions.map { session in
+        // Bound the transcript-title cache to the sessions currently on disk — otherwise it holds an
+        // entry for every session ever seen this run (Codex audit MED #7).
+        transcriptTitle.prune(keepingSessionIds: Set(sessions.map(\.id)))
+        return sessions.map { session in
             var resolved = session
             let aiTitle = transcriptTitle.title(sessionId: session.id, transcriptPath: session.transcript)
             let name = codexName(for: session, codexSessionScanner: codexSessionScanner)
@@ -225,10 +257,21 @@ public final class SessionStore: ObservableObject {
     nonisolated private static func codexName(for session: Session, codexSessionScanner: CodexSessionScanner) -> String {
         guard session.provider == .codex else { return session.name }
         guard session.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return session.name }
+        // Prefer THIS scan's unambiguous answer over the historical name cache. `latestSession`
+        // returns a match only when exactly one rollout occupies the cwd in the current snapshot, so
+        // when session A ran in /repo and ended and B is now the only rollout there, B still gets its
+        // own prompt — even though the historical `idsByCwd` remembers both ids forever and so
+        // `name(forCwd:)` is permanently poisoned to nil (Codex audit MED #7).
+        if let current = codexSessionScanner.latestSession(forCwd: session.cwd),
+           !current.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return current.name
+        }
         return codexSessionScanner.name(forCwd: session.cwd) ?? session.name
     }
 
-    private func apply(scanned: [Session], processes: [ProcessLiveness.DiscoveredProcess], processTable: [Int32: ProcessLiveness.ProcessTableEntry]) {
+    private func apply(scanned: [Session], processes: [ProcessLiveness.DiscoveredProcess], processTable: [Int32: ProcessLiveness.ProcessTableEntry], generation: UInt64) {
+        // Drop a scan that a newer one already superseded — the out-of-order guard (Codex audit #4).
+        guard shouldApply(generation: generation) else { return }
         let joined = SessionLivenessJoin.join(sessions: scanned, liveProcesses: processes, processTable: processTable)
         // Discovered rows (a live process with no hook file at all) never went through
         // `resolvingDisplayNames` above — resolve them here too. For a Codex discovered row, also

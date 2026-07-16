@@ -317,6 +317,59 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertNotEqual(session.displayName, "Second terminal's task")
     }
 
+    /// Codex audit MED #7: session A ran in /repo and ended; B now runs in /repo as the ONLY rollout
+    /// there. Even though the historical name cache remembers both ids forever (so `name(forCwd:)` is
+    /// permanently poisoned to nil for /repo), B must still get its own prompt-derived title from the
+    /// current unambiguous scan (`latestSession(forCwd:)`). Bites: revert `codexName` to use only
+    /// `name(forCwd:)` and B falls back to the folder placeholder.
+    @MainActor
+    func testRefresh_codexCwdOnceAmbiguousHistorically_currentSoleSessionStillGetsItsTitle() throws {
+        // fileListTTL 0 so the second refresh re-walks the tree (A gone, B present) instead of reusing
+        // the first scan's file listing.
+        let scanner = CodexSessionScanner(sessionsRoot: codexSessionsRoot, fileListTTL: 0)
+        let cwd = "/Users/me/repo"
+        let aFile = codexSessionsRoot.appendingPathComponent("2026/07/08/rollout-codex-a.jsonl")
+
+        // Scan 1: A is the live rollout in /repo — records A's id in the historical cache.
+        try writeCodexRollout(sessionId: "codex-a", cwd: cwd, userText: "Session A's task")
+        let store = SessionStore(
+            scanner: SessionScanner(directoryURL: tempDirectory),
+            discoverProcesses: { [ProcessLiveness.DiscoveredProcess(pid: 5252, provider: .codex, cwd: cwd, executablePath: "")] },
+            codexSessionScanner: scanner
+        )
+        store.refresh()
+
+        // A ends (its rollout is gone), B starts in the SAME cwd — now the sole rollout there, but the
+        // historical cache still remembers A's id alongside B's, poisoning `name(forCwd:)`.
+        try FileManager.default.removeItem(at: aFile)
+        try writeCodexRollout(sessionId: "codex-b", cwd: cwd, userText: "Session B's fresh task")
+        store.refresh()
+
+        XCTAssertNil(scanner.name(forCwd: cwd), "the historical cache is poisoned by two ids sharing the cwd")
+        let session = try XCTUnwrap(store.sessions.first { $0.ownerPid == 5252 })
+        XCTAssertEqual(session.displayName, "Session B's fresh task", "the current sole session must still get its own prompt")
+    }
+
+    // MARK: - Out-of-order scan guard (Codex audit MED #4)
+
+    /// A slow scan A can finish after a newer scan B and try to republish an older snapshot. The
+    /// monotonic generation gate must drop it. `shouldApply` records the newest generation seen and
+    /// rejects any lower one arriving later. Bites: remove the `generation > lastAppliedGeneration`
+    /// guard and the stale (lower) generation is accepted.
+    @MainActor
+    func testShouldApply_dropsAnOlderGenerationArrivingAfterANewerOne() {
+        let store = SessionStore(
+            scanner: SessionScanner(directoryURL: tempDirectory),
+            discoverProcesses: { [] },
+            codexSessionScanner: isolatedCodexSessionScanner
+        )
+
+        XCTAssertTrue(store.shouldApply(generation: 2), "the first (newest so far) scan applies")
+        XCTAssertFalse(store.shouldApply(generation: 1), "a slower, older scan finishing later must be dropped")
+        XCTAssertTrue(store.shouldApply(generation: 3), "a genuinely newer scan still applies")
+        XCTAssertFalse(store.shouldApply(generation: 3), "the same generation is not applied twice")
+    }
+
     /// Claude rows must be completely unaffected by the Codex-rollout enrichment path — a Claude
     /// session sharing a cwd with a Codex rollout must not have its name touched at all.
     @MainActor

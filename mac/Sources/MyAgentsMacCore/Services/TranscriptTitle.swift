@@ -76,6 +76,16 @@ public final class TranscriptTitle: @unchecked Sendable {
         return found
     }
 
+    /// Drops cache/miss entries for session ids no longer present on disk, so both maps stay bounded
+    /// by the live session count instead of growing for every session seen across one long-running
+    /// app session (Codex audit MED #7). Called by `SessionStore` each scan with the ids it just saw.
+    public func prune(keepingSessionIds ids: Set<String>) {
+        lock.lock()
+        defer { lock.unlock() }
+        cache = cache.filter { ids.contains($0.key) }
+        misses = misses.filter { ids.contains($0.key) }
+    }
+
     /// How to remember a fruitless scan.
     ///
     /// CRUCIAL: an UNREADABLE file is not a miss at all — it's "not there yet". The hook can publish

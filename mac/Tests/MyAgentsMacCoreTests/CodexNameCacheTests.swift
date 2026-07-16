@@ -63,4 +63,33 @@ final class CodexNameCacheTests: XCTestCase {
         cache.record(cwd: "/Users/me/project", sessionId: "", name: "Should not be recorded")
         XCTAssertNil(cache.name(forCwd: "/Users/me/project"))
     }
+
+    /// Codex audit MED #7: the caches must not grow for every rollout the machine ever produced.
+    /// Recording more distinct cwds than the cap evicts the OLDEST; the newest survive. Bites: drop
+    /// the LRU eviction in `record` and the oldest entry is still returned instead of nil.
+    func testExceedingCap_evictsOldestCwds_keepsNewest() {
+        let cache = CodexNameCache(maxEntries: 3)
+        cache.record(cwd: "/a", sessionId: "sa", name: "Name A")
+        cache.record(cwd: "/b", sessionId: "sb", name: "Name B")
+        cache.record(cwd: "/c", sessionId: "sc", name: "Name C")
+        cache.record(cwd: "/d", sessionId: "sd", name: "Name D") // pushes /a out
+
+        XCTAssertNil(cache.name(forCwd: "/a"), "the oldest cwd must be evicted once the cap is exceeded")
+        XCTAssertEqual(cache.name(forCwd: "/b"), "Name B")
+        XCTAssertEqual(cache.name(forCwd: "/c"), "Name C")
+        XCTAssertEqual(cache.name(forCwd: "/d"), "Name D")
+    }
+
+    /// Re-recording an existing cwd refreshes its recency, so it is NOT the one evicted next.
+    func testReRecordingCwd_refreshesRecency_soItSurvivesEviction() {
+        let cache = CodexNameCache(maxEntries: 2)
+        cache.record(cwd: "/a", sessionId: "sa", name: "Name A")
+        cache.record(cwd: "/b", sessionId: "sb", name: "Name B")
+        cache.record(cwd: "/a", sessionId: "sa", name: "Name A") // /a is now most-recent
+        cache.record(cwd: "/c", sessionId: "sc", name: "Name C") // evicts /b, not /a
+
+        XCTAssertEqual(cache.name(forCwd: "/a"), "Name A", "a re-recorded cwd must survive")
+        XCTAssertNil(cache.name(forCwd: "/b"), "the least-recently-recorded cwd is the one evicted")
+        XCTAssertEqual(cache.name(forCwd: "/c"), "Name C")
+    }
 }

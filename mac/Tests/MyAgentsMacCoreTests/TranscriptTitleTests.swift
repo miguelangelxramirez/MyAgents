@@ -195,6 +195,44 @@ final class TranscriptTitleTests: XCTestCase {
         )
     }
 
+    /// Codex audit MED #7: the per-session cache must be prunable to the live session set so it can't
+    /// grow for every session ever seen. After pruning a session away, its cached title is gone — a
+    /// subsequent lookup re-reads the file (here proven by the file being deleted meanwhile: the
+    /// cached value would have survived, a pruned one is gone). Bites: make `prune` a no-op and the
+    /// title is still returned from cache.
+    func testPrune_dropsEntriesNotInLiveSet_soCacheDoesNotLeak() throws {
+        let path = try write([#"{"type":"ai-title","aiTitle":"Cached then pruned"}"#], named: "prune.jsonl")
+        let sut = TranscriptTitle()
+
+        XCTAssertEqual(sut.title(sessionId: "gone-session", transcriptPath: path), "Cached then pruned")
+
+        // The session is no longer live, and its transcript is deleted.
+        sut.prune(keepingSessionIds: ["some-other-live-session"])
+        try FileManager.default.removeItem(at: URL(fileURLWithPath: path))
+
+        XCTAssertNil(
+            sut.title(sessionId: "gone-session", transcriptPath: path),
+            "a pruned session's title must not survive in the cache"
+        )
+    }
+
+    /// Pruning must KEEP entries whose ids are still live.
+    func testPrune_keepsEntriesStillInLiveSet() throws {
+        let path = try write([#"{"type":"ai-title","aiTitle":"Still live"}"#], named: "keep.jsonl")
+        let sut = TranscriptTitle()
+
+        XCTAssertEqual(sut.title(sessionId: "live-session", transcriptPath: path), "Still live")
+
+        sut.prune(keepingSessionIds: ["live-session"])
+        try FileManager.default.removeItem(at: URL(fileURLWithPath: path))
+
+        XCTAssertEqual(
+            sut.title(sessionId: "live-session", transcriptPath: path),
+            "Still live",
+            "a kept session's title stays cached even after the file is gone"
+        )
+    }
+
     func testHugePastedLineInTheHead_doesNotHideTheTitle() throws {
         // A pasted image is a single multi-megabyte line. It can't be a title, so it must be walked
         // past and discarded — not buffered, and not allowed to swallow the title after it.
