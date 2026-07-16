@@ -73,6 +73,26 @@ public struct UsageInfo: Equatable, Sendable {
         return value
     }
 
+    /// Returns a copy flagged `isStale` when this reading's capture is older than `threshold`, or
+    /// when it has no capture timestamp at all (an unknowable age can't be trusted as fresh). Used
+    /// when a fresh fetch failed and the store keeps showing the last good percentages: they must
+    /// grey out once they stop being refreshed instead of staying "live" forever (Codex audit MED
+    /// #5). Staleness is ONE-WAY here — this never un-flags an already-stale reading, and never
+    /// touches the percentages (a known reading is never dropped back to "—").
+    public func markingStale(ifOlderThan threshold: TimeInterval, now: Date = Date()) -> UsageInfo {
+        let aged = capturedAt.map { now.timeIntervalSince($0) > threshold } ?? true
+        guard aged, !isStale else { return self }
+        return UsageInfo(
+            provider: provider,
+            fiveHourPercent: fiveHourPercent,
+            fiveHourResetsAt: fiveHourResetsAt,
+            sevenDayPercent: sevenDayPercent,
+            sevenDayResetsAt: sevenDayResetsAt,
+            capturedAt: capturedAt,
+            isStale: true
+        )
+    }
+
     public var hasFiveHourReading: Bool { fiveHourPercent != nil }
     public var hasSevenDayReading: Bool { sevenDayPercent != nil }
 

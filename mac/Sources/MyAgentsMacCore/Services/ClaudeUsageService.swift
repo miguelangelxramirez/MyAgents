@@ -65,7 +65,10 @@ public struct ClaudeUsageService: Sendable {
             let seconds = number.int64Value
             return seconds > 0 ? Date(timeIntervalSince1970: TimeInterval(seconds)) : nil
         }
-        let isStale = capturedAt.map { Date().timeIntervalSince($0) > stalenessThreshold } ?? false
+        // A reading with valid buckets but NO capture timestamp (absent/zero `ts`) has an unknowable
+        // age, so it can't be trusted as fresh — it's stale, not fresh (Codex audit MED #5). Only a
+        // `ts` we can actually compare keeps a reading live while it's under the threshold.
+        let isStale = capturedAt.map { Date().timeIntervalSince($0) > stalenessThreshold } ?? true
 
         return UsageInfo(
             provider: .claude,

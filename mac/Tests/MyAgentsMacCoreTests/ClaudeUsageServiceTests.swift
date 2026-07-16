@@ -126,4 +126,23 @@ final class ClaudeUsageServiceTests: XCTestCase {
         let service = ClaudeUsageService(fileURL: tempFile, stalenessThreshold: 600)
         XCTAssertFalse(service.fetch().isStale)
     }
+
+    /// Codex audit MED #5: a document with valid buckets but NO `ts` (absent or zero) has an
+    /// unknowable age — it must be flagged stale, never treated as fresh. Bites: revert the
+    /// `capturedAt.map { … } ?? true` back to `?? false` and this fails (reads as fresh).
+    func testBucketPresentButNoTimestamp_isStale_notFresh() throws {
+        try write(#"{"five_hour":{"used_percent":48,"reset_at":0}}"#) // no "ts" at all
+        let service = ClaudeUsageService(fileURL: tempFile, stalenessThreshold: 600)
+        let usage = service.fetch()
+
+        XCTAssertEqual(usage.fiveHourPercent, 48, "the real percentage is still kept")
+        XCTAssertNil(usage.capturedAt, "there was no ts to capture")
+        XCTAssertTrue(usage.isStale, "a reading with no capture timestamp can't be trusted as fresh")
+    }
+
+    func testBucketPresentButZeroTimestamp_isStale_notFresh() throws {
+        try write(#"{"five_hour":{"used_percent":48,"reset_at":0},"ts":0}"#)
+        let service = ClaudeUsageService(fileURL: tempFile, stalenessThreshold: 600)
+        XCTAssertTrue(service.fetch().isStale, "a zero ts is no timestamp — stale, not fresh")
+    }
 }
