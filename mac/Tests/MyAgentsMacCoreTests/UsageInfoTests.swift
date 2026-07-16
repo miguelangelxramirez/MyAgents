@@ -18,6 +18,48 @@ final class UsageInfoTests: XCTestCase {
         XCTAssertFalse(usage.hasSevenDayReading)
     }
 
+    // MARK: - percent(from:) — the single funnel that enforces the 0...100 invariant
+
+    func testPercent_acceptsGenuineNumbers() {
+        XCTAssertEqual(UsageInfo.percent(from: NSNumber(value: 42.5)), 42.5)
+        XCTAssertEqual(UsageInfo.percent(from: NSNumber(value: 0)), 0,
+                       "a genuine numeric 0 is a real reading, not 'unknown'")
+        XCTAssertEqual(UsageInfo.percent(from: NSNumber(value: 100)), 100)
+    }
+
+    func testPercent_rejectsBooleanParsedFromRealJSON() throws {
+        // The exact bug shape: JSONSerialization turns `false`/`true` into an NSNumber (CFBoolean),
+        // whose `doubleValue` is 0.0/1.0 — so the old code showed a forbidden fake 0%. This test
+        // fails against that code and passes only once booleans are rejected.
+        let boolObj = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: Data(#"{"p": false, "q": true}"#.utf8)) as? [String: Any]
+        )
+        XCTAssertNil(UsageInfo.percent(from: boolObj["p"]), "a JSON `false` must never read as 0%")
+        XCTAssertNil(UsageInfo.percent(from: boolObj["q"]))
+
+        // Sanity: genuine numbers from the same JSON path still parse (incl. a real 0).
+        let numObj = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: Data(#"{"p": 0, "q": 55.5}"#.utf8)) as? [String: Any]
+        )
+        XCTAssertEqual(UsageInfo.percent(from: numObj["p"]), 0)
+        XCTAssertEqual(UsageInfo.percent(from: numObj["q"]), 55.5)
+    }
+
+    func testPercent_rejectsOutOfRangeAndNonFinite() {
+        XCTAssertNil(UsageInfo.percent(from: NSNumber(value: 1e100)),
+                     "garbage that would overflow Int(percent.rounded()) must be rejected")
+        XCTAssertNil(UsageInfo.percent(from: NSNumber(value: -1)))
+        XCTAssertNil(UsageInfo.percent(from: NSNumber(value: 100.01)))
+        XCTAssertNil(UsageInfo.percent(from: NSNumber(value: Double.nan)))
+        XCTAssertNil(UsageInfo.percent(from: NSNumber(value: Double.infinity)))
+    }
+
+    func testPercent_rejectsNonNumbers() {
+        XCTAssertNil(UsageInfo.percent(from: nil))
+        XCTAssertNil(UsageInfo.percent(from: "50"))
+        XCTAssertNil(UsageInfo.percent(from: ["x": 1]))
+    }
+
     func testUnknown_preservesProvider() {
         XCTAssertEqual(UsageInfo.unknown(provider: .claude).provider, .claude)
         XCTAssertEqual(UsageInfo.unknown(provider: .codex).provider, .codex)

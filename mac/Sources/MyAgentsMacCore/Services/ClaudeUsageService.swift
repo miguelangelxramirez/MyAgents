@@ -79,7 +79,7 @@ public struct ClaudeUsageService: Sendable {
     }
 
     private func bucket(from raw: Any?) -> (percent: Double, resetAt: Date?)? {
-        guard let dict = raw as? [String: Any], let percent = (dict["used_percent"] as? NSNumber)?.doubleValue else {
+        guard let dict = raw as? [String: Any], let percent = UsageInfo.percent(from: dict["used_percent"]) else {
             return nil
         }
         let resetSeconds = (dict["reset_at"] as? NSNumber)?.int64Value ?? 0

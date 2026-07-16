@@ -182,7 +182,7 @@ public struct CodexUsageService: Sendable {
     }
 
     private static func camelBucket(_ raw: Any?) -> (percent: Double, resetAt: Date?)? {
-        guard let dict = raw as? [String: Any], let percent = (dict["usedPercent"] as? NSNumber)?.doubleValue else {
+        guard let dict = raw as? [String: Any], let percent = UsageInfo.percent(from: dict["usedPercent"]) else {
             return nil
         }
         let resetSeconds = (dict["resetsAt"] as? NSNumber)?.int64Value ?? 0
@@ -268,7 +268,7 @@ public struct CodexUsageService: Sendable {
     }
 
     private static func snakeBucket(_ raw: Any?) -> (percent: Double, resetAt: Date?)? {
-        guard let dict = raw as? [String: Any], let percent = (dict["used_percent"] as? NSNumber)?.doubleValue else {
+        guard let dict = raw as? [String: Any], let percent = UsageInfo.percent(from: dict["used_percent"]) else {
             return nil
         }
         let resetSeconds = (dict["resets_at"] as? NSNumber)?.int64Value ?? 0

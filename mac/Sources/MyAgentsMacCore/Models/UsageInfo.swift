@@ -51,6 +51,28 @@ public struct UsageInfo: Equatable, Sendable {
         UsageInfo(provider: provider)
     }
 
+    /// Extracts a trustworthy 0...100 percentage from a value produced by `JSONSerialization`,
+    /// or `nil` when it can't be trusted as a real reading. This is the single funnel every usage
+    /// parser uses, so the "percentages are 0...100" invariant above is actually enforced.
+    ///
+    /// It rejects two things a bare `(raw as? NSNumber)?.doubleValue` accepts silently:
+    /// - JSON booleans. `true`/`false` bridge to `NSNumber` as `CFBoolean`, so `"used_percent": false`
+    ///   would read as `0.0` — a fabricated `0%`, the one value this type must never show (a real 0%
+    ///   and "unknown" are different facts). Told apart by `CFTypeID`, not by `as? Bool` (which is
+    ///   itself unreliable for `NSNumber`).
+    /// - Non-finite or out-of-range numbers. `"used_percent": 1e100` is a finite JSON number that
+    ///   later overflows `Int(percent.rounded())` and traps; `NaN`/`±inf`/negatives are meaningless.
+    ///   Anything outside `0...100` is treated as corruption and rejected (shown as "—"), while a
+    ///   genuine numeric `0` is preserved.
+    public static func percent(from raw: Any?) -> Double? {
+        guard let number = raw as? NSNumber, CFGetTypeID(number as CFTypeRef) != CFBooleanGetTypeID() else {
+            return nil
+        }
+        let value = number.doubleValue
+        guard value.isFinite, value >= 0, value <= 100 else { return nil }
+        return value
+    }
+
     public var hasFiveHourReading: Bool { fiveHourPercent != nil }
     public var hasSevenDayReading: Bool { sevenDayPercent != nil }
 
