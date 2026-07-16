@@ -174,6 +174,16 @@ public enum SessionGridLayout {
         return min(max(needed, 1), max(maxRows, 1))
     }
 
+    /// How many sessions are scrolled OUT of view — the count beyond the `columns × maxRows` the
+    /// viewport shows. Zero when everything fits. Drives the "+N more" scroll hint: with exactly two
+    /// full rows visible and no peeking partial row, nothing on screen signals there's more below,
+    /// so a user doesn't know to scroll (feedback 2026-07-16: "no sé si hay más de 6 y por eso no
+    /// hago scroll").
+    public static func hiddenCount(sessionCount: Int, columns: Int, maxRows: Int) -> Int {
+        guard columns > 0, maxRows > 0 else { return 0 }
+        return max(0, sessionCount - columns * maxRows)
+    }
+
     /// Exact viewport height for `rows` tiles of `tileHeight`, with `rowGap` between them and
     /// `verticalPadding` above and below. A clean multiple of the row height — the grid can only
     /// show whole rows, so a partial row can never peek at the bottom edge.

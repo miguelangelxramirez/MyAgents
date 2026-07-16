@@ -127,6 +127,17 @@ final class DesignTokensTests: XCTestCase {
         XCTAssertEqual(SessionGridLayout.visibleRows(sessionCount: 99, columns: columns, maxRows: maxRows), 2)
     }
 
+    func testHiddenCount_isZeroWhenEverythingFits_andTheOverflowOtherwise() {
+        // ≤6 sessions (2 rows × 3 cols) all fit → no "+N more" hint.
+        XCTAssertEqual(SessionGridLayout.hiddenCount(sessionCount: 6, columns: columns, maxRows: maxRows), 0)
+        XCTAssertEqual(SessionGridLayout.hiddenCount(sessionCount: 3, columns: columns, maxRows: maxRows), 0)
+        // 7 → 1 hidden, 10 → 4 hidden.
+        XCTAssertEqual(SessionGridLayout.hiddenCount(sessionCount: 7, columns: columns, maxRows: maxRows), 1)
+        XCTAssertEqual(SessionGridLayout.hiddenCount(sessionCount: 10, columns: columns, maxRows: maxRows), 4)
+        // Degenerate inputs never report a phantom overflow.
+        XCTAssertEqual(SessionGridLayout.hiddenCount(sessionCount: 9, columns: 0, maxRows: maxRows), 0)
+    }
+
     func testVisibleRows_degenerateInputs_neverCollapseBelowOne() {
         // Zero columns / zero max would divide-by-zero or vanish the list; the floor is one row.
         XCTAssertEqual(SessionGridLayout.visibleRows(sessionCount: 5, columns: 0, maxRows: maxRows), 1)

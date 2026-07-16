@@ -150,7 +150,34 @@ struct PopoverRootView: View {
             }
             .scrollIndicators(.automatic)
             .frame(height: sessionListHeight)
+
+            if hiddenSessionCount > 0 {
+                overflowHint
+            }
         }
+    }
+
+    /// Sessions scrolled below the two visible rows — see `SessionGridLayout.hiddenCount`.
+    private var hiddenSessionCount: Int {
+        SessionGridLayout.hiddenCount(
+            sessionCount: sessionStore.sessions.count,
+            columns: DesignTokens.Metrics.sessionGridColumns,
+            maxRows: DesignTokens.Metrics.sessionMaxVisibleRows
+        )
+    }
+
+    /// A compact "+N more ↓" line shown only when sessions overflow the viewport — the cue that
+    /// there's more to scroll to, which two full rows with no peeking partial row otherwise hide.
+    private var overflowHint: some View {
+        HStack(spacing: DesignTokens.Spacing.xxs) {
+            Text(String(localized: "sessions.more", defaultValue: "+\(hiddenSessionCount) more"))
+            Image(systemName: "chevron.down")
+        }
+        .font(DesignTokens.Typography.caption)
+        .foregroundStyle(DesignTokens.Colors.secondaryForeground)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, DesignTokens.Spacing.xxs)
+        .accessibilityLabel(String(localized: "sessions.more.a11y", defaultValue: "\(hiddenSessionCount) more sessions below — scroll to see them"))
     }
 
     private var emptyState: some View {

@@ -9,11 +9,10 @@ struct UsageSectionView: View {
     let codex: UsageInfo
 
     var body: some View {
+        // No "Usage" header row: the two provider rows are self-labelled ("Claude"/"Codex"), so the
+        // header was pure vertical cost (feedback 2026-07-16: "quita la palabra Uso y esa fila,
+        // ocupa mucho"). The section is still visually set off by the divider above it.
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-            Text(String(localized: "usage.header", defaultValue: "Usage"))
-                .font(DesignTokens.Typography.sectionHeader)
-                .foregroundStyle(DesignTokens.Colors.secondaryForeground)
-
             UsageProviderView(
                 title: String(localized: "usage.claude", defaultValue: "Claude"),
                 info: claude,

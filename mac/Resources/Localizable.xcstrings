@@ -633,6 +633,38 @@
         }
       }
     },
+    "sessions.more": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%lld more"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%lld más"
+          }
+        }
+      }
+    },
+    "sessions.more.a11y": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld more sessions below — scroll to see them"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld sesiones más abajo — desplázate para verlas"
+          }
+        }
+      }
+    },
     "state.active": {
       "localizations": {
         "en": {
