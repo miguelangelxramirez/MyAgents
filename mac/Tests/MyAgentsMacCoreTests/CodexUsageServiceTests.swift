@@ -41,6 +41,12 @@ final class CodexUsageServiceTests: XCTestCase {
         try line.write(to: file, atomically: true, encoding: .utf8)
     }
 
+    private func writeRolloutData(_ data: Data, subpath: String = "2026/07/08/rollout-test.jsonl") throws {
+        let file = tempDirectory.appendingPathComponent("sessions").appendingPathComponent(subpath)
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: file)
+    }
+
     private var rolloutRoot: URL { tempDirectory.appendingPathComponent("sessions") }
 
     // MARK: - PRIMARY: app-server RPC framing + parsing
@@ -101,6 +107,34 @@ final class CodexUsageServiceTests: XCTestCase {
         XCTAssertEqual(usage.fiveHourPercent, 7, "must read the LIVE RPC value — service closed stdin too early if this is 1 (the stale rollout)")
         XCTAssertEqual(usage.sevenDayPercent, 88)
         XCTAssertFalse(usage.isStale, "a live RPC reading must not be flagged stale")
+    }
+
+    /// Codex audit MED #8: the child's stderr used to be a finite Pipe that only stdout drained.
+    /// A child that emits more stderr than the ~64 KB pipe buffer holds BLOCKS before it can answer,
+    /// so every refresh waited out the kill-switch. With stderr routed to /dev/null the child never
+    /// blocks: this fixture floods 200 KB of stderr (far past any pipe buffer) BEFORE replying, and
+    /// must still return the live value promptly. Bites: restore `process.standardError = Pipe()` and
+    /// this hangs until the timeout and returns unknown (no rollout provided), failing both asserts.
+    func testAppServerRPC_floodsStderrBeforeReplying_stillReadsLiveValueWithoutBlocking() async throws {
+        let script = try writeScript("""
+        #!/bin/sh
+        read -r l1
+        read -r l2
+        read -r l3
+        # 200 KB of stderr — larger than the kernel pipe buffer. If stderr were an undrained Pipe,
+        # this write would block here and the id:2 answer below would never be sent.
+        head -c 200000 /dev/zero | tr '\\0' 'x' >&2
+        echo '{"jsonrpc":"2.0","id":2,"result":{"rateLimits":{"primary":{"usedPercent":73,"resetsAt":1700000000}}}}'
+        """, named: "fake-app-server-stderr-flood.sh")
+
+        let service = CodexUsageService(rpcCommand: ["/bin/sh", script.path], rpcTimeout: 8, rolloutRoot: emptyRolloutRoot)
+
+        let start = Date()
+        let usage = await service.fetch()
+        let elapsed = Date().timeIntervalSince(start)
+
+        XCTAssertEqual(usage.fiveHourPercent, 73, "the child must answer even after a stderr flood — stderr must not be an undrained finite pipe")
+        XCTAssertLessThan(elapsed, 6, "answering must be prompt, not blocked until the kill-switch fires")
     }
 
     func testAppServerRPC_malformedResponse_fallsBackRatherThanCrashing() async throws {
@@ -179,6 +213,41 @@ final class CodexUsageServiceTests: XCTestCase {
 
         XCTAssertEqual(usage.fiveHourPercent, 64)
         XCTAssertEqual(usage.sevenDayPercent, 21)
+    }
+
+    /// Codex audit MED #6: the rollout fallback tails the last 64 KB and used to decode the WHOLE
+    /// block with one strict `String(data:encoding:.utf8)`. When the arbitrary `size - 64K` offset
+    /// splits a multi-byte UTF-8 character (routine in a Spanish prompt), that decode returned nil and
+    /// silently discarded a valid later `rate_limits` line. This builds a file whose tail offset lands
+    /// EXACTLY on the second byte of an "é" (0xC3 0xA9) with a real `rate_limits` line behind it: the
+    /// old whole-block decode → unknown; the line-by-line reader → the live 42%.
+    func testRollout_multibyteCharStraddlingTheTailOffset_stillFindsLaterRateLimitsLine() async throws {
+        let rateLine = #"{"payload":{"rate_limits":{"primary":{"used_percent":42,"resets_at":1700000000}}}}"#
+        var rateData = Data(rateLine.utf8)
+        rateData.append(0x0A)
+
+        // The last 65536 bytes (the tail window) must begin with 0xA9 — the orphaned continuation
+        // byte of the "é" whose first byte (0xC3) is the last byte before the window.
+        let tailWindow = 65536
+        var tail = Data([0xA9, 0x0A]) // continuation byte, then a newline that ends the split fragment
+        let fillerCount = tailWindow - 2 - 1 - rateData.count // minus the trailing '\n' after filler
+        XCTAssertGreaterThan(fillerCount, 0)
+        tail.append(Data(repeating: UInt8(ascii: "a"), count: fillerCount))
+        tail.append(0x0A)
+        tail.append(rateData)
+        XCTAssertEqual(tail.count, tailWindow, "tail must be exactly the tail window so the offset lands on 0xA9")
+
+        var fileData = Data(repeating: UInt8(ascii: "b"), count: 100)
+        fileData.append(0xC3) // first byte of "é" — the last byte before the tail window
+        fileData.append(tail)
+
+        try writeRolloutData(fileData, subpath: "2026/07/08/rollout-multibyte.jsonl")
+
+        let script = try writeScript("#!/bin/sh\nexit 1\n", named: "fake-app-server-exit1-mb.sh")
+        let service = CodexUsageService(rpcCommand: ["/bin/sh", script.path], rpcTimeout: 5, rolloutRoot: rolloutRoot)
+        let usage = await service.fetch()
+
+        XCTAssertEqual(usage.fiveHourPercent, 42, "a split multibyte char at the offset must not swallow the valid rate_limits line behind it")
     }
 
     func testRollout_missingDirectory_returnsUnknown() async throws {

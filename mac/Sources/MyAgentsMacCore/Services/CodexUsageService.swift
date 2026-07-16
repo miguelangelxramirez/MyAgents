@@ -95,10 +95,14 @@ public struct CodexUsageService: Sendable {
 
         let stdinPipe = Pipe()
         let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
         process.standardInput = stdinPipe
         process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
+        // stderr → /dev/null, NOT a Pipe. A Pipe has a finite (~64 KB) kernel buffer; since only
+        // stdout is drained below, enough stderr from the login shell or `codex app-server` fills
+        // that buffer and BLOCKS the child before it ever answers `account/rateLimits/read` — so
+        // every refresh waited out the 12s kill-switch and fell to the stale rollout (Codex audit
+        // MED #8, 2026-07-16). `nullDevice` can never fill, so the child never blocks on it.
+        process.standardError = FileHandle.nullDevice
 
         do {
             try process.run()
@@ -147,6 +151,11 @@ public struct CodexUsageService: Sendable {
         return parseRPCLine(matchedLine)
     }
 
+    /// Hard ceiling on the stdout accumulator: a runaway child streaming without a newline must not
+    /// grow this without limit. The real response line is a few hundred bytes; 1 MiB is enormous
+    /// headroom and still bounds a misbehaving `app-server`.
+    private static let maxStdoutBufferBytes = 1 << 20
+
     /// Reads newline-delimited stdout until a line containing `marker` shows up, or EOF/the
     /// kill-switch closes the pipe first (in which case this returns `nil`).
     private static func readLine(containing marker: String, from handle: FileHandle) -> String? {
@@ -162,6 +171,9 @@ public struct CodexUsageService: Sendable {
                     return line
                 }
             }
+            // Whatever's left is an as-yet-incomplete line. If even that has blown past the ceiling,
+            // the child is misbehaving (no newline in sight) — bail rather than accumulate forever.
+            if buffer.count > maxStdoutBufferBytes { return nil }
         }
     }
 
@@ -224,21 +236,20 @@ public struct CodexUsageService: Sendable {
         return nil
     }
 
+    /// How many trailing bytes of a rollout to scan looking for the last `rate_limits` line.
+    private static let tailBytes = 65536
+
     /// Tail-reads the last 64 KB of `file` and returns its last line containing `"rate_limits"`.
+    ///
+    /// Uses `BoundedLineReader.tailLines` — the SAME offset-safe reader `CodexSessionScanner` uses —
+    /// rather than decoding the whole 64 KB block with one strict `String(data:encoding:.utf8)`.
+    /// The old block-decode returned nil whenever the arbitrary `size - 64K` offset split a multi-byte
+    /// UTF-8 character (routine in a Spanish prompt), silently discarding a valid later `rate_limits`
+    /// line (Codex audit MED #6, 2026-07-16 — the same bug already fixed in the status-tail path).
     private static func lastRateLimitsLine(in file: URL) -> String? {
-        guard let handle = try? FileHandle(forReadingFrom: file) else { return nil }
-        defer { try? handle.close() }
-        guard let fileSize = try? handle.seekToEnd() else { return nil }
-        let tailSize: UInt64 = 65536
-        let offset = fileSize > tailSize ? fileSize - tailSize : 0
-        guard (try? handle.seek(toOffset: offset)) != nil,
-              let data = try? handle.readToEnd(),
-              let text = String(data: data, encoding: .utf8) else {
-            return nil
-        }
         var last: String?
-        for line in text.split(separator: "\n", omittingEmptySubsequences: true) where line.contains("\"rate_limits\"") {
-            last = String(line)
+        for line in BoundedLineReader.tailLines(of: file, maxBytes: tailBytes) where line.contains("\"rate_limits\"") {
+            last = line
         }
         return last
     }

@@ -140,6 +140,41 @@ public enum BoundedLineReader {
         return consumed >= maxLines ? .lineLimit : .byteLimit
     }
 
+    /// The COMPLETE lines contained in the last `maxBytes` of `file`.
+    ///
+    /// The byte offset we seek to is arbitrary — it will usually land in the middle of a line, and it
+    /// can land in the middle of a multi-byte UTF-8 character (a Spanish prompt is full of them). So:
+    /// drop everything before the first newline AS BYTES (that fragment is not a whole line anyway,
+    /// and it is the only place a split character can occur), then decode each remaining line on its
+    /// own. A line that still fails to decode is skipped, never fatal.
+    ///
+    /// This is the single tail reader shared by `CodexSessionScanner` (turn-boundary marker) and
+    /// `CodexUsageService` (last `rate_limits` line). Decoding the WHOLE block with one strict
+    /// `String(data:encoding:.utf8)` — as `CodexUsageService` used to — makes a single orphaned
+    /// continuation byte at the front return nil, throwing away every valid line behind it.
+    public static func tailLines(of file: URL, maxBytes: Int) -> [String] {
+        guard let handle = try? FileHandle(forReadingFrom: file) else { return [] }
+        defer { try? handle.close() }
+        guard let fileSize = try? handle.seekToEnd() else { return [] }
+        let size = UInt64(maxBytes)
+        let offset = fileSize > size ? fileSize - size : 0
+        guard (try? handle.seek(toOffset: offset)) != nil, let data = try? handle.readToEnd() else {
+            return []
+        }
+
+        let newline = UInt8(ascii: "\n")
+        // Only when we started mid-file is the leading fragment a partial line; a tail that IS the
+        // whole file starts at a real line boundary and must keep its first line.
+        var body = data[data.startIndex...]
+        if offset > 0 {
+            guard let firstNewline = body.firstIndex(of: newline) else { return [] }
+            body = body[body.index(after: firstNewline)...]
+        }
+
+        return body.split(separator: newline, omittingEmptySubsequences: true)
+            .compactMap { String(data: $0, encoding: .utf8) }
+    }
+
     /// Convenience: collects up to `maxLines` leading lines. Prefer `forEachLine` when the caller can
     /// stop early — a scan that stops at line 6 must not pay for lines 7...60.
     public static func head(

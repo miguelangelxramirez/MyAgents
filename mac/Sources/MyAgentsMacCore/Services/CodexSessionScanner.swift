@@ -509,7 +509,7 @@ public final class CodexSessionScanner: @unchecked Sendable {
     /// files on this machine; no real approval-required session was available to verify the
     /// approval-request line shape — see `isApprovalRequest` for how the marker is now matched.
     private static func readMarker(file: URL) -> TailMarker {
-        let lines = tailLines(of: file, maxBytes: stateTailBytes)
+        let lines = BoundedLineReader.tailLines(of: file, maxBytes: stateTailBytes)
         for line in lines.reversed() {
             if line.contains("\"task_complete\"") { return .turnEnded }
             if line.contains("\"turn_aborted\"") { return .turnEnded }
@@ -550,43 +550,6 @@ public final class CodexSessionScanner: @unchecked Sendable {
         guard let endQuote = rest.firstIndex(of: "\"") else { return nil }
         let value = String(rest[rest.startIndex..<endQuote])
         return iso8601WithFractionalSeconds.date(from: value) ?? iso8601Plain.date(from: value)
-    }
-
-    // MARK: - Bounded file reading (never slurps a whole file)
-
-    /// The COMPLETE lines contained in the last `maxBytes` of `file`.
-    ///
-    /// The byte offset we seek to is arbitrary — it will usually land in the middle of a line, and it
-    /// can land in the middle of a multi-byte UTF-8 character (a Spanish prompt is full of them). So:
-    /// drop everything before the first newline AS BYTES (that fragment is not a whole line anyway,
-    /// and it is the only place a split character can occur), then decode each remaining line on its
-    /// own. A line that still fails to decode is skipped, never fatal.
-    ///
-    /// The old version decoded the WHOLE 16 KiB block with one strict `String(data:encoding:.utf8)`.
-    /// A single orphaned continuation byte at the front made that return nil, throwing away every
-    /// valid marker behind it — the session then fell through to the 30-second recency heuristic and
-    /// could show the wrong state (found by an external review, 2026-07-12).
-    private static func tailLines(of file: URL, maxBytes: Int) -> [String] {
-        guard let handle = try? FileHandle(forReadingFrom: file) else { return [] }
-        defer { try? handle.close() }
-        guard let fileSize = try? handle.seekToEnd() else { return [] }
-        let size = UInt64(maxBytes)
-        let offset = fileSize > size ? fileSize - size : 0
-        guard (try? handle.seek(toOffset: offset)) != nil, let data = try? handle.readToEnd() else {
-            return []
-        }
-
-        let newline = UInt8(ascii: "\n")
-        // Only when we started mid-file is the leading fragment a partial line; a tail that IS the
-        // whole file starts at a real line boundary and must keep its first line.
-        var body = data[data.startIndex...]
-        if offset > 0 {
-            guard let firstNewline = body.firstIndex(of: newline) else { return [] }
-            body = body[body.index(after: firstNewline)...]
-        }
-
-        return body.split(separator: newline, omittingEmptySubsequences: true)
-            .compactMap { String(data: $0, encoding: .utf8) }
     }
 
 }
