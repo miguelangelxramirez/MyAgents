@@ -313,16 +313,25 @@ public enum ProcessLiveness {
     /// or the script arg of a known runtime) — never a blanket substring scan of all of argv.
     static func provider(name: String, executablePath: String, arguments: [String]) -> Provider? {
         let shortName = name.lowercased()
+        let executableBase = (executablePath as NSString).lastPathComponent.lowercased()
+
+        // 0) A Codex INTERNAL helper (`codex-code-mode-host`) is a CHILD of an interactive codex,
+        //    never a session — exclude it up front, before ANY positive rule. Its binary is a
+        //    Homebrew symlink resolving to `…/Caskroom/codex/<ver>/bin/codex-code-mode-host`, whose
+        //    path contains "/codex/" and so matched the path rule below (the name-only guards added
+        //    earlier didn't cover the path rule) — surfacing the helper as a phantom codex session
+        //    that folded into its own parent as a bogus "1 agent" on EVERY real codex row.
+        if isCodexHelper(shortName) || isCodexHelper(executableBase) { return nil }
+
         // 1) Exact process name. Codex self-names "codex[-arch]"; "claude" covers older installs
         //    and the test fixtures (a modern Claude renames itself to its version — caught below).
-        if shortName == "codex" || (shortName.hasPrefix("codex-") && !isCodexHelper(shortName)) { return .codex }
+        if shortName == "codex" || shortName.hasPrefix("codex-") { return .codex }
         if shortName == "claude" { return .claude }
 
         // 2) Executable path with a REAL path component (not a loose substring): Claude lives at
         //    `…/claude/versions/<ver>`; a folder merely named "claude-501" won't match "/claude/".
         let path = executablePath.lowercased()
-        let executableBase = (executablePath as NSString).lastPathComponent.lowercased()
-        if executableBase == "codex" || (executableBase.hasPrefix("codex-") && !isCodexHelper(executableBase)) || path.contains("/codex/") { return .codex }
+        if executableBase == "codex" || executableBase.hasPrefix("codex-") || path.contains("/codex/") { return .codex }
         if path.contains("/claude/") || path.contains("/.claude/") { return .claude }
 
         // 3) argv[0] basename — the exact CLI invocation (native install: argv0 = "claude"/"codex").

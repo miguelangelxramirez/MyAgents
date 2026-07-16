@@ -114,6 +114,19 @@ final class ProcessLivenessTests: XCTestCase {
         ))
     }
 
+    func testCodexCodeModeHostHelper_withResolvedCaskroomPath_isStillNotASession() {
+        // REALITY the symlink-path test above missed: `/opt/homebrew/bin/codex-code-mode-host` is a
+        // symlink, and `proc_pidpath` hands back the RESOLVED target under the Homebrew Caskroom,
+        // whose path contains "/codex/". That matched the `path.contains("/codex/")` rule and
+        // classified the helper as a codex session — a phantom "1 agent" on every real codex row
+        // (2026-07-16). The helper must be rejected BEFORE any path rule.
+        XCTAssertNil(ProcessLiveness.provider(
+            name: "codex-code-mode-",   // pbi_name is capped at 16 chars → the truncated helper name
+            executablePath: "/opt/homebrew/Caskroom/codex/0.144.1/bin/codex-code-mode-host",
+            arguments: ["codex-code-mode-host"]
+        ))
+    }
+
     func testNodeHostedClaude_isClassifiedByScriptArg() {
         let provider = ProcessLiveness.provider(
             name: "node",
