@@ -26,8 +26,9 @@ public enum SessionOrdering {
         switch session.state {
         case .permission: return 0
         case .thinking, .tool: return 1
-        case .idle: return 2
-        case .ended: return 3
+        case .active: return 2   // alive (a discovered Codex process), above a hook-reported at-rest
+        case .idle: return 3
+        case .ended: return 4
         }
     }
 

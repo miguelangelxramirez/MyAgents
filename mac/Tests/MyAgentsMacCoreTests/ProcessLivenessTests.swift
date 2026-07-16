@@ -102,6 +102,18 @@ final class ProcessLivenessTests: XCTestCase {
         XCTAssertEqual(provider, .codex)
     }
 
+    func testCodexCodeModeHostHelper_isNotClassifiedAsASession() {
+        // `codex-code-mode-host` is a Codex internal helper spawned per interactive session. Its name
+        // starts with "codex-" but it is NOT a session — classifying it produced a phantom row AND a
+        // spurious "1 agent" badge on its own parent codex. It must stay unclassified everywhere the
+        // "codex-" prefix is honored (name, executable base, argv[0]).
+        XCTAssertNil(ProcessLiveness.provider(
+            name: "codex-code-mode-host",
+            executablePath: "/opt/homebrew/bin/codex-code-mode-host",
+            arguments: ["codex-code-mode-host"]
+        ))
+    }
+
     func testNodeHostedClaude_isClassifiedByScriptArg() {
         let provider = ProcessLiveness.provider(
             name: "node",

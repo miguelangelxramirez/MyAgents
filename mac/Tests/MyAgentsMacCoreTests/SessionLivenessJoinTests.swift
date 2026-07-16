@@ -8,8 +8,8 @@ import XCTest
 /// drop the cwd normalization), or stop emitting discovered rows, and the corresponding assertion
 /// fails.
 final class SessionLivenessJoinTests: XCTestCase {
-    private func process(pid: Int32, provider: Provider, cwd: String) -> ProcessLiveness.DiscoveredProcess {
-        ProcessLiveness.DiscoveredProcess(pid: pid, provider: provider, cwd: cwd, executablePath: "")
+    private func process(pid: Int32, provider: Provider, cwd: String, ppid: Int32 = 0, tty: String = "") -> ProcessLiveness.DiscoveredProcess {
+        ProcessLiveness.DiscoveredProcess(pid: pid, provider: provider, cwd: cwd, executablePath: "", ppid: ppid, tty: tty)
     }
 
     func testSessionWithLiveOwnerPid_staysOpen() {
@@ -70,7 +70,7 @@ final class SessionLivenessJoinTests: XCTestCase {
         XCTAssertTrue(result.isEmpty, "an empty cwd must never be treated as a match key")
     }
 
-    func testLiveProcessWithNoSessionRow_becomesDiscoveredIdleRow() throws {
+    func testLiveProcessWithNoSessionRow_becomesDiscoveredActiveRow() throws {
         let live = [process(pid: 900, provider: .claude, cwd: "/Users/me/other-project")]
 
         let result = SessionLivenessJoin.join(sessions: [], liveProcesses: live, isAlive: { _ in false })
@@ -80,7 +80,32 @@ final class SessionLivenessJoinTests: XCTestCase {
         XCTAssertEqual(discovered.ownerPid, 900)
         XCTAssertEqual(discovered.provider, .claude)
         XCTAssertEqual(discovered.folder, "other-project")
-        XCTAssertEqual(discovered.state, .idle)
+        // A process we found ourselves (no hook feed) is `.active` — "alive, activity unknown" —
+        // never a hook-reported `.idle`, which would falsely assert the session is at rest.
+        XCTAssertEqual(discovered.state, .active)
+    }
+
+    func testDiscoveredRow_carriesProcessTtyForTabExactFocus() throws {
+        let live = [process(pid: 901, provider: .codex, cwd: "/Users/me/proj", tty: "/dev/ttys009")]
+
+        let result = SessionLivenessJoin.join(sessions: [], liveProcesses: live, isAlive: { _ in false })
+
+        XCTAssertEqual(try XCTUnwrap(result.first).tty, "/dev/ttys009")
+    }
+
+    func testDiscoveredRow_derivesTerminalHostFromAncestry() throws {
+        // codex(902) ← -zsh(700) ← login(600) ← Terminal(500): a genuine interactive Terminal.app tab.
+        let live = [process(pid: 902, provider: .codex, cwd: "/Users/me/proj", ppid: 700)]
+        let table: [Int32: ProcessLiveness.ProcessTableEntry] = [
+            902: .init(ppid: 700, comm: "codex"),
+            700: .init(ppid: 600, comm: "-zsh"),
+            600: .init(ppid: 500, comm: "login"),
+            500: .init(ppid: 1, comm: "Terminal"),
+        ]
+
+        let result = SessionLivenessJoin.join(sessions: [], liveProcesses: live, processTable: table, isAlive: { _ in false })
+
+        XCTAssertEqual(try XCTUnwrap(result.first).terminalHost, "apple_terminal")
     }
 
     func testLiveProcessAlreadyClaimedByPidSession_doesNotAlsoAppearAsDiscovered() {

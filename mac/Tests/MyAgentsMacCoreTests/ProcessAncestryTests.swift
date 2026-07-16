@@ -105,6 +105,45 @@ final class ProcessAncestryTests: XCTestCase {
         XCTAssertEqual(ProcessLiveness.classifyAncestry(pid: 100, in: map), .subagent(parentPid: 50))
     }
 
+    func testCodexCodeModeHost_isNotAnAgentAncestor() {
+        // `codex-code-mode-host` is a Codex INTERNAL helper (a child of every interactive codex), not
+        // a session. It must stay TRANSPARENT in an ancestry walk — otherwise a codex sitting under it
+        // would be miscounted as that helper's subagent. Here the only non-shell ancestor is the
+        // helper, so the walk reaches the top → interactive.
+        let map = table([
+            (100, 50, "codex"),
+            (50, 40, "codex-code-mode-host"),
+            (40, 1, "login"),
+        ])
+        XCTAssertEqual(ProcessLiveness.classifyAncestry(pid: 100, in: map), .interactive)
+        XCTAssertFalse(ProcessLiveness.isAgentComm("codex-code-mode-host"))
+        XCTAssertTrue(ProcessLiveness.isCodexHelper("codex-code-mode-host"))
+        // The arch-suffixed real binary is NOT a helper — it must still count as an agent.
+        XCTAssertFalse(ProcessLiveness.isCodexHelper("codex-aarch64-apple-darwin"))
+    }
+
+    func testTerminalHost_derivedFromTabCapableTerminalAncestor() {
+        let map = table([
+            (100, 50, "codex"),
+            (50, 40, "-zsh"),
+            (40, 30, "login"),
+            (30, 1, "Terminal"),
+        ])
+        XCTAssertEqual(ProcessLiveness.terminalHost(forPid: 100, in: map), "apple_terminal")
+        XCTAssertEqual(ProcessLiveness.terminalHostForComm("iTerm2"), "iterm.app")
+        XCTAssertEqual(ProcessLiveness.terminalHostForComm("Ghostty"), "ghostty")
+        XCTAssertNil(ProcessLiveness.terminalHostForComm("login"))
+    }
+
+    func testTerminalHost_emptyWhenNoRecognizedTerminalAncestor() {
+        // A codex under only shells/launchd (e.g. a headless run) has no tab-capable terminal to focus.
+        let map = table([
+            (100, 50, "codex"),
+            (50, 1, "-zsh"),
+        ])
+        XCTAssertEqual(ProcessLiveness.terminalHost(forPid: 100, in: map), "")
+    }
+
     // MARK: - Depth, cycles, and missing data (hostile maps)
 
     func testDeepButWithinCapChain_stillFindsTheAgentParent() {

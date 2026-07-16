@@ -202,6 +202,7 @@ struct SessionTileView: View {
         switch session.state {
         case .permission: return DesignTokens.Colors.permission
         case .thinking, .tool: return providerColor
+        case .active: return providerColor
         case .idle, .ended: return DesignTokens.Colors.secondaryForeground
         }
     }
@@ -213,6 +214,7 @@ struct SessionTileView: View {
         case .tool: return "hammer.fill"
         case .idle: return "pause.circle"
         case .ended: return "checkmark.circle"
+        case .active: return "terminal"
         }
     }
 

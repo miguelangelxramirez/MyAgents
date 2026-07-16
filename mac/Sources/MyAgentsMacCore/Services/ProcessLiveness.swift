@@ -38,13 +38,19 @@ public enum ProcessLiveness {
         /// failed (e.g. a process owned by another user). Used by `classifyAncestry` to tell a
         /// standalone interactive session apart from a nested subagent / orphan.
         public let ppid: Int32
+        /// Controlling terminal device path (e.g. `/dev/ttys005`), from the SAME `PROC_PIDTBSDINFO`
+        /// fetch that gives the name/ppid (`e_tdev`, mapped via `devname` — no extra syscall). Empty
+        /// when the process has no controlling terminal. Lets click-to-focus select the EXACT tab
+        /// hosting a Codex session, which — unlike Claude — writes no hook file carrying a title.
+        public let tty: String
 
-        public init(pid: Int32, provider: Provider, cwd: String, executablePath: String, ppid: Int32 = 0) {
+        public init(pid: Int32, provider: Provider, cwd: String, executablePath: String, ppid: Int32 = 0, tty: String = "") {
             self.pid = pid
             self.provider = provider
             self.cwd = cwd
             self.executablePath = executablePath
             self.ppid = ppid
+            self.tty = tty
         }
     }
 
@@ -113,10 +119,52 @@ public enum ProcessLiveness {
     private static let maxAncestryDepth = 64
 
     /// A tracked AGENT ancestor — the thing that makes a codex/claude a SUBAGENT rather than a
-    /// standalone session. Recognized by `comm` alone (cheap): `claude`, `codex`, `codex-*`.
+    /// standalone session. Recognized by `comm` alone (cheap): `claude`, `codex`, `codex-*` — but
+    /// NOT a Codex internal helper (`isCodexHelper`), which is a child of a real codex, not a session.
     static func isAgentComm(_ comm: String) -> Bool {
         let name = comm.lowercased()
+        if isCodexHelper(name) { return false }
         return name == "claude" || name == "codex" || name.hasPrefix("codex-")
+    }
+
+    /// A Codex INTERNAL helper process — `codex-code-mode-host` — spawned by every interactive Codex
+    /// (one per session). Its `comm` starts with `codex-`, so the broad `codex-*` match above would
+    /// otherwise (a) surface it as a phantom session row and (b) count it as a "1 agent" subagent of
+    /// its own parent Codex. It is neither: exclude it from both discovery and ancestry. Prefix (not
+    /// exact) match tolerates the 32-char `pbi_name` cap and any future `codex-code-mode-*` variant.
+    static func isCodexHelper(_ comm: String) -> Bool {
+        comm.lowercased().hasPrefix("codex-code-mode")
+    }
+
+    /// The `terminalHost` (a `TERM_PROGRAM`-style token, e.g. `apple_terminal`) for the tab-capable
+    /// terminal app hosting `pid`, found by walking its ancestry — the analogue, for a Codex session
+    /// discovered purely by process (no hook file), of the `terminalHost` a Claude hook records.
+    /// Returns "" when no recognized terminal app is an ancestor. Pure over the process-table map.
+    static func terminalHost(forPid pid: Int32, in table: [Int32: ProcessTableEntry]) -> String {
+        var current = table[pid]?.ppid ?? 0
+        var visited: Set<Int32> = [pid]
+        var depth = 0
+        while current > 1, depth < maxAncestryDepth, !visited.contains(current) {
+            visited.insert(current)
+            guard let entry = table[current] else { return "" }
+            if let host = terminalHostForComm(entry.comm) { return host }
+            current = entry.ppid
+            depth += 1
+        }
+        return ""
+    }
+
+    /// Maps a terminal APP's `comm` to the `terminalHost` token `TerminalFocusPlanner` understands.
+    /// Only the three tab-capable terminals (Terminal.app / iTerm2 / Ghostty) have a stable, clean
+    /// process name; window-only terminals reach the shell through renamed helper processes, so we
+    /// don't guess them here (they degrade to no focus, exactly as before).
+    static func terminalHostForComm(_ comm: String) -> String? {
+        switch comm.lowercased() {
+        case "terminal": return "apple_terminal"
+        case "iterm2": return "iterm.app"
+        case "ghostty": return "ghostty"
+        default: return nil
+        }
     }
 
     /// A non-session owner — an ancestor that owns the process but is NOT a session: the app's own
@@ -176,6 +224,7 @@ public enum ProcessLiveness {
         let bsd = bsdInfo(pid: pid)
         let shortName = bsd?.name ?? ""
         let ppid = bsd?.ppid ?? 0
+        let tty = bsd.map { ttyPath(forDev: $0.tdev) } ?? ""
         let executablePath = executablePath(pid: pid) ?? ""
         let executableBase = (executablePath as NSString).lastPathComponent
 
@@ -191,7 +240,7 @@ public enum ProcessLiveness {
         guard let provider = provider(name: shortName, executablePath: executablePath, arguments: arguments) else {
             return nil
         }
-        return DiscoveredProcess(pid: pid, provider: provider, cwd: cwd(pid: pid) ?? "", executablePath: executablePath, ppid: ppid)
+        return DiscoveredProcess(pid: pid, provider: provider, cwd: cwd(pid: pid) ?? "", executablePath: executablePath, ppid: ppid, tty: tty)
     }
 
     private static func isScriptHost(_ name: String) -> Bool {
@@ -216,19 +265,19 @@ public enum ProcessLiveness {
         let shortName = name.lowercased()
         // 1) Exact process name. Codex self-names "codex[-arch]"; "claude" covers older installs
         //    and the test fixtures (a modern Claude renames itself to its version — caught below).
-        if shortName == "codex" || shortName.hasPrefix("codex-") { return .codex }
+        if shortName == "codex" || (shortName.hasPrefix("codex-") && !isCodexHelper(shortName)) { return .codex }
         if shortName == "claude" { return .claude }
 
         // 2) Executable path with a REAL path component (not a loose substring): Claude lives at
         //    `…/claude/versions/<ver>`; a folder merely named "claude-501" won't match "/claude/".
         let path = executablePath.lowercased()
         let executableBase = (executablePath as NSString).lastPathComponent.lowercased()
-        if executableBase == "codex" || executableBase.hasPrefix("codex-") || path.contains("/codex/") { return .codex }
+        if executableBase == "codex" || (executableBase.hasPrefix("codex-") && !isCodexHelper(executableBase)) || path.contains("/codex/") { return .codex }
         if path.contains("/claude/") || path.contains("/.claude/") { return .claude }
 
         // 3) argv[0] basename — the exact CLI invocation (native install: argv0 = "claude"/"codex").
         let argv0 = (arguments.first.map { ($0 as NSString).lastPathComponent } ?? "").lowercased()
-        if argv0 == "codex" || argv0.hasPrefix("codex-") { return .codex }
+        if argv0 == "codex" || (argv0.hasPrefix("codex-") && !isCodexHelper(argv0)) { return .codex }
         if argv0 == "claude" { return .claude }
 
         // 4) node/bun/deno-hosted CLI: inspect ONLY the script argument (argv[1]) — NOT env or the
@@ -247,12 +296,23 @@ public enum ProcessLiveness {
     /// (`classify` for discovery, `processTable` for the ancestry map) go through here, so `pbi_ppid`
     /// never costs a syscall of its own (energy law). `nil` on any failure (e.g. another user's
     /// process), which callers treat as name `""` / ppid `0`.
-    private static func bsdInfo(pid: pid_t) -> (name: String, ppid: Int32)? {
+    private static func bsdInfo(pid: pid_t) -> (name: String, ppid: Int32, tdev: UInt32)? {
         var info = proc_bsdinfo()
         let size = Int32(MemoryLayout<proc_bsdinfo>.size)
         guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
         let name = nulTerminatedCString(from: &info.pbi_name)
-        return (name: name, ppid: Int32(bitPattern: info.pbi_ppid))
+        return (name: name, ppid: Int32(bitPattern: info.pbi_ppid), tdev: info.e_tdev)
+    }
+
+    /// Maps a controlling-terminal device number (`e_tdev`) to its `/dev` path (`/dev/ttys005`) via
+    /// `devname` — the reverse of what a terminal reports over AppleScript, so a Codex session can be
+    /// matched to its exact tab by tty. Empty when the process has no controlling terminal (`e_tdev`
+    /// is `NODEV`, all-ones) or `devname` yields nothing.
+    private static func ttyPath(forDev dev: UInt32) -> String {
+        guard dev != 0, dev != UInt32.max else { return "" }
+        guard let cName = devname(dev_t(bitPattern: dev), mode_t(S_IFCHR)) else { return "" }
+        let name = String(cString: cName)
+        return name.isEmpty ? "" : "/dev/\(name)"
     }
 
     private static func executablePath(pid: pid_t) -> String? {

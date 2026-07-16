@@ -41,7 +41,7 @@ public struct TerminalFocuser: Sendable {
     /// `titleTag` marker. `titleTag` stays as a secondary fallback for setups that do embed the
     /// `⟦cc:…⟧` marker in the title.
     public func focus(session: Session) -> TerminalFocusResult {
-        focus(terminalHost: session.terminalHost, title: session.displayName, titleTag: session.titleTag)
+        focus(terminalHost: session.terminalHost, title: session.displayName, titleTag: session.titleTag, tty: session.tty)
     }
 
     /// Brings the session's terminal forward. Never throws, never crashes: a missing app or a
@@ -54,14 +54,18 @@ public struct TerminalFocuser: Sendable {
     ///     app to macOS"`).
     ///   - titleTag: the `⟦cc:…⟧` focus marker — a secondary fallback CONTAINS match for setups
     ///     that put the marker literally in the title instead.
-    public func focus(terminalHost: String, title: String, titleTag: String) -> TerminalFocusResult {
+    /// - Parameter tty: the session's controlling terminal device path (`/dev/ttys005`) when the
+    ///   session was discovered as a live process (a Codex session). When present, it drives an
+    ///   EXACT tab match by tty on Terminal.app/iTerm2 — more reliable than the title heuristic, and
+    ///   the only match key a Codex session has (it stamps no aiTitle). Empty → title matching.
+    public func focus(terminalHost: String, title: String, titleTag: String, tty: String = "") -> TerminalFocusResult {
         let titleSource = Self.describeTitleSource(title: title, titleTag: titleTag)
-        logger.info("Focus start: host='\(terminalHost, privacy: .public)' using \(titleSource, privacy: .public)")
+        logger.info("Focus start: host='\(terminalHost, privacy: .public)' using \(tty.isEmpty ? titleSource : "tty", privacy: .public)")
 
         let result: TerminalFocusResult
         switch TerminalFocusPlanner.strategy(forTerminalHost: terminalHost) {
         case .appleTerminal, .iterm, .ghostty:
-            result = focusScriptable(TerminalFocusPlanner.strategy(forTerminalHost: terminalHost), title: title, titleTag: titleTag)
+            result = focusScriptable(TerminalFocusPlanner.strategy(forTerminalHost: terminalHost), title: title, titleTag: titleTag, tty: tty)
         case .windowOnly(let target):
             if activate(target) {
                 result = .focusedWindow
@@ -85,16 +89,19 @@ public struct TerminalFocuser: Sendable {
         return "none"
     }
 
-    private func focusScriptable(_ strategy: TerminalFocusStrategy, title: String, titleTag: String) -> TerminalFocusResult {
+    private func focusScriptable(_ strategy: TerminalFocusStrategy, title: String, titleTag: String, tty: String) -> TerminalFocusResult {
         guard let appName = strategy.scriptableAppName else { return .failed(reason: .unsupportedTerminal) }
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedTag = titleTag.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedTty = tty.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // A marker shorter than 3 chars would match almost any tab title (same guard the Windows
-        // reference uses) — degrade to "just bring the app forward" rather than land on the wrong
-        // tab.
+        // Prefer an EXACT tty match (Codex sessions) over the title heuristic. A marker shorter than
+        // 3 chars would match almost any tab title (same guard the Windows reference uses) — degrade
+        // to "just bring the app forward" rather than land on the wrong tab.
         let source: String
-        if let matchScript = TerminalFocusScript.build(strategy: strategy, title: trimmedTitle, titleTag: trimmedTag) {
+        if !trimmedTty.isEmpty, let ttyScript = TerminalFocusScript.buildByTTY(strategy: strategy, tty: trimmedTty) {
+            source = ttyScript
+        } else if let matchScript = TerminalFocusScript.build(strategy: strategy, title: trimmedTitle, titleTag: trimmedTag) {
             source = matchScript
         } else {
             source = TerminalFocusScript.activateOnly(appName: appName)
@@ -321,6 +328,82 @@ public enum TerminalFocusScript {
         case .ghostty: return ghostty(titleMarker: titleMarker, tagMarker: tagMarker)
         case .windowOnly, .unsupported: return nil
         }
+    }
+
+    /// Builds an EXACT-tab-by-tty script for the terminals whose scripting exposes a tab/session
+    /// `tty` — Terminal.app (`tty of tab`) and iTerm2 (`tty of session`), both verified against their
+    /// scripting dictionaries (2026-07). Ghostty exposes no tty, so it returns `nil` and the caller
+    /// falls back to the title heuristic. The tty is a device path we produced (`/dev/ttysNNN`), but
+    /// it's escaped anyway (defense in depth), and matched with `is` (exact), never `contains`.
+    public static func buildByTTY(strategy: TerminalFocusStrategy, tty: String) -> String? {
+        let escaped = AppleScriptString.escaped(tty)
+        switch strategy {
+        case .appleTerminal: return appleTerminalByTTY(tty: escaped)
+        case .iterm: return itermByTTY(tty: escaped)
+        case .ghostty, .windowOnly, .unsupported: return nil
+        }
+    }
+
+    private static func appleTerminalByTTY(tty: String) -> String {
+        """
+        tell application "Terminal"
+        \tset matched to false
+        \trepeat with w in windows
+        \t\trepeat with t in tabs of w
+        \t\t\tset td to ""
+        \t\t\ttry
+        \t\t\t\tset td to tty of t
+        \t\t\tend try
+        \t\t\tif td is "\(tty)" then
+        \t\t\t\tset selected tab of w to t
+        \t\t\t\tset index of w to 1
+        \t\t\t\tset frontmost of w to true
+        \t\t\t\tset matched to true
+        \t\t\t\texit repeat
+        \t\t\tend if
+        \t\tend repeat
+        \t\tif matched then exit repeat
+        \tend repeat
+        \tactivate
+        \tif matched then
+        \t\treturn "tab"
+        \telse
+        \t\treturn "app"
+        \tend if
+        end tell
+        """
+    }
+
+    private static func itermByTTY(tty: String) -> String {
+        """
+        tell application "iTerm2"
+        \tset matched to false
+        \trepeat with w in windows
+        \t\trepeat with t in tabs of w
+        \t\t\trepeat with s in sessions of t
+        \t\t\t\tset td to ""
+        \t\t\t\ttry
+        \t\t\t\t\tset td to tty of s
+        \t\t\t\tend try
+        \t\t\t\tif td is "\(tty)" then
+        \t\t\t\t\ttell t to select
+        \t\t\t\t\ttell w to select
+        \t\t\t\t\tset matched to true
+        \t\t\t\t\texit repeat
+        \t\t\t\tend if
+        \t\t\tend repeat
+        \t\t\tif matched then exit repeat
+        \t\tend repeat
+        \t\tif matched then exit repeat
+        \tend repeat
+        \tactivate
+        \tif matched then
+        \t\treturn "tab"
+        \telse
+        \t\treturn "app"
+        \tend if
+        end tell
+        """
     }
 
     /// Bare "bring the app to the front" fallback (no marker available / too short to be safe).

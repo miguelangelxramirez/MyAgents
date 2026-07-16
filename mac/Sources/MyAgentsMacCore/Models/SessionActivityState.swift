@@ -13,6 +13,11 @@ public enum SessionActivityState: String, Sendable, Codable {
     case permission
     case idle
     case ended
+    /// Alive, but with no state feed: a session the app discovered purely as a live PROCESS (a Codex
+    /// session — Codex writes no hook file, unlike Claude). We know it's running, not whether it's
+    /// thinking/idle/waiting, so this is deliberately distinct from `.idle` (which is a POSITIVE "at
+    /// rest" reported by a hook). Has no wire representation — the app assigns it, like `.ended`.
+    case active
 
     /// Tolerant decode: an unrecognized raw value (a future hook state) falls back to `.idle`
     /// instead of failing the whole session file — a corrupt/unknown `state` string must not
@@ -47,6 +52,8 @@ public enum SessionActivityState: String, Sendable, Codable {
             return String(localized: "state.idle", defaultValue: "Idle")
         case .ended:
             return String(localized: "state.ended", defaultValue: "Ended")
+        case .active:
+            return String(localized: "state.active", defaultValue: "Active")
         }
     }
 }

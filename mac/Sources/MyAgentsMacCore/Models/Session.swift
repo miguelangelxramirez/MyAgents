@@ -59,6 +59,11 @@ public struct Session: Identifiable, Equatable, Sendable {
     /// presence shows.
     public var subagentCount: Int
 
+    /// Controlling terminal device path (`/dev/ttys005`) for a session discovered purely as a live
+    /// PROCESS (a Codex session — no hook file). Lets click-to-focus select the EXACT tab by tty.
+    /// Empty for hook-sourced sessions (they focus by title) and any process without a terminal.
+    public var tty: String
+
     public init(
         id: String,
         name: String = "",
@@ -76,7 +81,8 @@ public struct Session: Identifiable, Equatable, Sendable {
         titleTag: String = "",
         host: String = "",
         displayName: String = "",
-        subagentCount: Int = 0
+        subagentCount: Int = 0,
+        tty: String = ""
     ) {
         self.id = id
         self.name = name
@@ -95,6 +101,7 @@ public struct Session: Identifiable, Equatable, Sendable {
         self.host = host
         self.displayName = displayName
         self.subagentCount = subagentCount
+        self.tty = tty
     }
 
     // MARK: - Derived flags (mirror `SessionState.cs`'s `NeedsAttention`/`IsBusy`/`IsStale`)

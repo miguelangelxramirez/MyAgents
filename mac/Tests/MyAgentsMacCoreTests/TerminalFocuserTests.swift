@@ -29,6 +29,48 @@ final class TerminalFocuserTests: XCTestCase {
         Session(id: "s", terminalHost: host, titleTag: tag, displayName: title)
     }
 
+    // MARK: - Tab-exact by tty (Codex sessions, discovered by process)
+
+    func testAppleTerminal_withTty_matchesTabByTty_notTitle() {
+        let spy = Spy(); spy.scriptOutcome = .success("tab")
+        let session = Session(id: "s", terminalHost: "Apple_Terminal", displayName: "codex", tty: "/dev/ttys009")
+        let result = makeFocuser(spy).focus(session: session)
+        XCTAssertEqual(result, .focusedTab)
+        let script = try! XCTUnwrap(spy.lastScript)
+        XCTAssertTrue(script.contains("tty of t"), "must match the Terminal tab by its tty")
+        XCTAssertTrue(script.contains(#"is "/dev/ttys009""#), "the exact tty must reach the script")
+        XCTAssertFalse(script.contains("contains"), "tty match is exact, never a fuzzy title contains")
+    }
+
+    func testITerm_withTty_matchesSessionByTty() {
+        let spy = Spy(); spy.scriptOutcome = .success("tab")
+        let session = Session(id: "s", terminalHost: "iTerm.app", tty: "/dev/ttys009")
+        _ = makeFocuser(spy).focus(session: session)
+        let script = try! XCTUnwrap(spy.lastScript)
+        XCTAssertTrue(script.contains(#"tell application "iTerm2""#))
+        XCTAssertTrue(script.contains("tty of s"), "iTerm exposes tty on the session")
+    }
+
+    func testTty_takesPrecedenceOverTitleMarker() {
+        let spy = Spy()
+        let session = Session(id: "s", terminalHost: "Apple_Terminal", titleTag: "⟦cc:1fd1ff1c⟧", displayName: "Some Long Title", tty: "/dev/ttys004")
+        _ = makeFocuser(spy).focus(session: session)
+        let script = try! XCTUnwrap(spy.lastScript)
+        XCTAssertTrue(script.contains(#"is "/dev/ttys004""#))
+        XCTAssertFalse(script.contains("1fd1ff1c"), "with a tty present, the title marker is not used")
+    }
+
+    func testGhosttyWithTty_fallsBackToTitleOrActivate_noTtyScript() {
+        // Ghostty exposes no tty over AppleScript, so `buildByTTY` returns nil and we degrade to the
+        // title path (here empty → activate only). It must NOT emit a bogus `tty of` script.
+        let spy = Spy()
+        let session = Session(id: "s", terminalHost: "Ghostty", tty: "/dev/ttys009")
+        _ = makeFocuser(spy).focus(session: session)
+        let script = try! XCTUnwrap(spy.lastScript)
+        XCTAssertTrue(script.contains(#"tell application "Ghostty""#))
+        XCTAssertFalse(script.contains("tty of"), "Ghostty has no scriptable tty")
+    }
+
     // MARK: - Tab-capable
 
     func testAppleTerminal_withMarker_scriptSelectsTab_isFocusedTab() {

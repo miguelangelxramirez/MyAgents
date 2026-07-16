@@ -633,6 +633,22 @@
         }
       }
     },
+    "state.active": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Active"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Activo"
+          }
+        }
+      }
+    },
     "state.ended": {
       "localizations": {
         "en": {

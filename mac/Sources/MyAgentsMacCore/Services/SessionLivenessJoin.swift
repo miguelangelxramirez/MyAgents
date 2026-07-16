@@ -83,8 +83,13 @@ public enum SessionLivenessJoin {
                     folder: URL(fileURLWithPath: process.cwd.isEmpty ? "/" : process.cwd).lastPathComponent,
                     cwd: process.cwd,
                     provider: process.provider,
-                    state: .idle,
-                    ownerPid: process.pid
+                    // Discovered purely as a live process (no hook file): we know it's alive, not its
+                    // exact activity — `.active`, never a hook-reported `.idle`. `terminalHost`/`tty`
+                    // come from the process itself so click-to-focus can still find its terminal tab.
+                    state: .active,
+                    ownerPid: process.pid,
+                    terminalHost: ProcessLiveness.terminalHost(forPid: process.pid, in: processTable),
+                    tty: process.tty
                 )
             }
 
