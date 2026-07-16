@@ -46,14 +46,30 @@ public enum SessionLivenessJoin {
         }
         let liveProcesses = interactive
 
-        let liveKeys = Set(liveProcesses.map { key(provider: $0.provider, cwd: $0.cwd) })
+        // Index the live processes by (provider, cwd) so an open session can ADOPT the tty of the
+        // process it matched. A hook-sourced row (every Claude session, and any Codex that does have
+        // a hook file) records no tty of its own — without this it's stuck with the fragile
+        // custom-title heuristic even though its live process's EXACT tab is known. The result was
+        // maddeningly inconsistent: a session whose agent `cd`'d into a subfolder no longer matched a
+        // process by cwd, fell through to a bare process-DISCOVERED row (which DID carry the tty) and
+        // opened fine; a session sitting in its original cwd stayed a hook row with no tty and failed
+        // to open. Copying the tty here makes both focus by exact tab. First process per key wins.
+        var processByKey: [String: ProcessLiveness.DiscoveredProcess] = [:]
+        for process in liveProcesses where !process.cwd.isEmpty {
+            let k = key(provider: process.provider, cwd: process.cwd)
+            if processByKey[k] == nil { processByKey[k] = process }
+        }
 
-        let openSessions = sessions.filter { session in
+        let openSessions = sessions.compactMap { session -> Session? in
             if let ownerPid = session.ownerPid {
-                return isAlive(ownerPid)
+                return isAlive(ownerPid) ? session : nil
             }
-            guard !session.cwd.isEmpty else { return false }
-            return liveKeys.contains(key(provider: session.provider, cwd: session.cwd))
+            guard !session.cwd.isEmpty else { return nil }
+            guard let process = processByKey[key(provider: session.provider, cwd: session.cwd)] else { return nil }
+            guard session.tty.isEmpty, !process.tty.isEmpty else { return session }
+            var enriched = session
+            enriched.tty = process.tty
+            return enriched
         }
 
         // Collapse the pid-less rows that share a folder down to the single freshest one. On macOS

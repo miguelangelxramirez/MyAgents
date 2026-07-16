@@ -44,6 +44,27 @@ final class SessionLivenessJoinTests: XCTestCase {
         XCTAssertEqual(result.map(\.id), ["s1"])
     }
 
+    func testPidLessSession_adoptsTtyOfMatchedLiveProcess() {
+        // A hook-sourced row (every Claude session) records no tty of its own; without adopting the
+        // matched process's tty it would be stuck on the fragile custom-title heuristic and fail to
+        // open its exact tab — the "some sessions don't open" bug. It must inherit `/dev/ttys011`.
+        let session = Session(id: "s1", cwd: "/Users/me/project", provider: .claude, ownerPid: nil, tty: "")
+        let live = [process(pid: 500, provider: .claude, cwd: "/Users/me/project", tty: "/dev/ttys011")]
+
+        let result = SessionLivenessJoin.join(sessions: [session], liveProcesses: live, isAlive: { _ in false })
+        XCTAssertEqual(result.map(\.id), ["s1"])
+        XCTAssertEqual(result.first?.tty, "/dev/ttys011", "an open session must adopt the tty of the live process it matched")
+    }
+
+    func testPidLessSession_keepsItsOwnTty_overMatchedProcess() {
+        // A row that already carries a tty (a discovered Codex row) must not have it overwritten.
+        let session = Session(id: "s1", cwd: "/Users/me/project", provider: .codex, ownerPid: nil, tty: "/dev/ttys005")
+        let live = [process(pid: 500, provider: .codex, cwd: "/Users/me/project", tty: "/dev/ttys099")]
+
+        let result = SessionLivenessJoin.join(sessions: [session], liveProcesses: live, isAlive: { _ in false })
+        XCTAssertEqual(result.first?.tty, "/dev/ttys005", "an existing tty must win over the matched process's")
+    }
+
     func testPidLessSession_toleratesTrailingSlashDifference() {
         let session = Session(id: "s1", cwd: "/Users/me/project/", provider: .codex, ownerPid: nil)
         let live = [process(pid: 500, provider: .codex, cwd: "/Users/me/project")]
