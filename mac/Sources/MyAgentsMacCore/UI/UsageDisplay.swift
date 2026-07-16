@@ -44,26 +44,54 @@ public enum MenuBarUsageMetric: String, CaseIterable, Sendable {
     }
 
     /// Which rolling window this metric reads.
-    public var window: Window {
+    public var window: UsageWindow {
         switch self {
         case .claudeFiveHour, .codexFiveHour: return .fiveHour
         case .claudeSevenDay, .codexSevenDay: return .sevenDay
         }
     }
 
-    public enum Window: Sendable {
-        case fiveHour
-        case sevenDay
-    }
-
     /// The (percent, staleness) for this metric, picked from whichever provider applies. `percent`
-    /// is `nil` when that window is unknown — the UI shows "—", never a fabricated 0%.
+    /// is `nil` when that window is unknown OR the provider doesn't expose it — the badge shows "—".
     public func reading(claude: UsageInfo, codex: UsageInfo) -> (percent: Double?, isStale: Bool) {
         let info = provider == .claude ? claude : codex
+        return (info.percent(for: window), info.isStale)
+    }
+}
+
+/// One of the two rolling rate-limit windows. Shared by the menu-bar metric picker and the popover
+/// usage rows so "which window" is one type, not two parallel enums.
+public enum UsageWindow: String, CaseIterable, Sendable {
+    case fiveHour
+    case sevenDay
+}
+
+public extension UsageInfo {
+    /// This window's consumed percentage (`nil` when the provider gave no reading for it).
+    func percent(for window: UsageWindow) -> Double? {
         switch window {
-        case .fiveHour: return (info.fiveHourPercent, info.isStale)
-        case .sevenDay: return (info.sevenDayPercent, info.isStale)
+        case .fiveHour: return fiveHourPercent
+        case .sevenDay: return sevenDayPercent
         }
+    }
+
+    /// This window's reset time (`nil` when unknown or the window isn't reported).
+    func resetsAt(for window: UsageWindow) -> Date? {
+        switch window {
+        case .fiveHour: return fiveHourResetsAt
+        case .sevenDay: return sevenDayResetsAt
+        }
+    }
+
+    /// The windows this provider ACTUALLY reports, in display order (5 h before 7 d). A window the
+    /// provider doesn't expose is omitted — e.g. Codex currently publishes only the 7-day limit, so
+    /// its 5-hour row simply isn't drawn instead of showing an empty "—". It reappears on its own if
+    /// the provider starts sending it again, and the same rule applies to Claude, so either provider
+    /// adapts identically if their windows ever change (feedback 2026-07-16). Empty only when the
+    /// provider has no reading at all (never fetched / source unreachable) — the UI then shows a
+    /// single "—" placeholder rather than a bare, windowless block.
+    var presentWindows: [UsageWindow] {
+        UsageWindow.allCases.filter { percent(for: $0) != nil }
     }
 }
 

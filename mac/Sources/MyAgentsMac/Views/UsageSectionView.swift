@@ -45,20 +45,31 @@ private struct UsageProviderView: View {
                 }
             }
 
-            UsageBarRow(
-                label: String(localized: "usage.window.5h", defaultValue: "5 h"),
-                percent: info.fiveHourPercent,
-                resetsAt: info.fiveHourResetsAt,
-                provider: provider,
-                stale: info.isStale
-            )
-            UsageBarRow(
-                label: String(localized: "usage.window.7d", defaultValue: "7 d"),
-                percent: info.sevenDayPercent,
-                resetsAt: info.sevenDayResetsAt,
-                provider: provider,
-                stale: info.isStale
-            )
+            // Only the windows the provider actually reports — a window it doesn't expose (Codex
+            // currently has no 5-hour limit) draws nothing rather than an empty "—" row, and returns
+            // on its own if the provider starts sending it again (`presentWindows`). If the provider
+            // has no reading at all, one "—" placeholder still stands in so the block isn't empty.
+            let windows = info.presentWindows
+            if windows.isEmpty {
+                UsageBarRow(label: "", percent: nil, resetsAt: nil, provider: provider, stale: info.isStale)
+            } else {
+                ForEach(windows, id: \.self) { window in
+                    UsageBarRow(
+                        label: Self.label(for: window),
+                        percent: info.percent(for: window),
+                        resetsAt: info.resetsAt(for: window),
+                        provider: provider,
+                        stale: info.isStale
+                    )
+                }
+            }
+        }
+    }
+
+    private static func label(for window: UsageWindow) -> String {
+        switch window {
+        case .fiveHour: return String(localized: "usage.window.5h", defaultValue: "5 h")
+        case .sevenDay: return String(localized: "usage.window.7d", defaultValue: "7 d")
         }
     }
 

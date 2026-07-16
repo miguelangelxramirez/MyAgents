@@ -80,4 +80,38 @@ final class UsageDisplayTests: XCTestCase {
         }
         XCTAssertNil(MenuBarUsageMetric(rawValue: "garbage"))
     }
+
+    // MARK: - presentWindows: adapt to a provider that drops/adds a window
+
+    func testPresentWindows_bothReported_showsBothInOrder() {
+        let info = UsageInfo(provider: .claude, fiveHourPercent: 10, sevenDayPercent: 20)
+        XCTAssertEqual(info.presentWindows, [.fiveHour, .sevenDay])
+    }
+
+    func testPresentWindows_onlySevenDay_omitsTheMissingFiveHour() {
+        // Codex's current shape: a 7-day limit, no 5-hour window → only the 7-day row is drawn.
+        let info = UsageInfo(provider: .codex, fiveHourPercent: nil, sevenDayPercent: 42)
+        XCTAssertEqual(info.presentWindows, [.sevenDay])
+    }
+
+    func testPresentWindows_onlyFiveHour_omitsTheMissingSevenDay() {
+        // The mirror case (if a provider ever exposes only the 5-hour window) works identically.
+        let info = UsageInfo(provider: .codex, fiveHourPercent: 8, sevenDayPercent: nil)
+        XCTAssertEqual(info.presentWindows, [.fiveHour])
+    }
+
+    func testPresentWindows_noReadingAtAll_isEmpty_soUIShowsOnePlaceholder() {
+        XCTAssertEqual(UsageInfo.unknown(provider: .codex).presentWindows, [])
+    }
+
+    func testPercentAndResetsAt_perWindow_matchTheStoredFields() {
+        let reset5 = Date(timeIntervalSince1970: 1000)
+        let reset7 = Date(timeIntervalSince1970: 2000)
+        let info = UsageInfo(provider: .claude, fiveHourPercent: 5, fiveHourResetsAt: reset5,
+                             sevenDayPercent: 7, sevenDayResetsAt: reset7)
+        XCTAssertEqual(info.percent(for: .fiveHour), 5)
+        XCTAssertEqual(info.percent(for: .sevenDay), 7)
+        XCTAssertEqual(info.resetsAt(for: .fiveHour), reset5)
+        XCTAssertEqual(info.resetsAt(for: .sevenDay), reset7)
+    }
 }
