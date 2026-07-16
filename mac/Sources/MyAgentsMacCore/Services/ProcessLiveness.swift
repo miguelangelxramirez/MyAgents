@@ -98,13 +98,55 @@ public enum ProcessLiveness {
     }
 
     /// Builds the whole-process-table ancestry map: `pid → (ppid, comm)` for every live process,
-    /// best-effort. This is the WHOLE table (not just agents) because `classifyAncestry` has to
-    /// walk through transparent ancestors (shells, `login`, `Terminal`) that aren't agents.
+    /// best-effort. This is the WHOLE table (not just agents) because `classifyAncestry` and
+    /// `terminalHost` have to walk through transparent ancestors (shells, `login`, `Terminal`) that
+    /// aren't agents.
     ///
-    /// Energy: this is a cheap pass — one `PROC_PIDTBSDINFO` per pid and nothing else (no
-    /// `proc_pidpath`/`sysctl`), the same single `proc_pidinfo` call `discoverAgentProcesses`
-    /// already makes per pid, reused here for its `pbi_ppid`.
+    /// Built with ONE `sysctl(KERN_PROC_ALL)` — deliberately NOT `proc_pidinfo` per pid. The chain
+    /// from a user's shell up to Terminal.app passes through a ROOT-owned `login` (Terminal spawns
+    /// `login`, which drops to the user's shell), and `proc_pidinfo(PROC_PIDTBSDINFO)` CANNOT read
+    /// another user's process — so `login` was silently missing from the table, the ancestry walk
+    /// died there before reaching `Terminal`, and every hookless discovered session (a Codex row, or
+    /// a Claude with no hook file) resolved `terminalHost == ""` → `.unsupported` → click did
+    /// nothing. `KERN_PROC_ALL` returns ppid + `p_comm` for EVERY process regardless of owner (it's
+    /// what `ps` uses), so the chain is complete. `p_comm` is capped at `MAXCOMLEN` (16) — fine here:
+    /// every name we match on (`terminal`, `iterm2`, `ghostty`, `claude`, `codex`, `codex-code-mode…`)
+    /// fits. Falls back to the old per-pid scan if the sysctl fails.
     public static func processTable() -> [Int32: ProcessTableEntry] {
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
+        var size = 0
+        guard sysctl(&mib, 4, nil, &size, nil, 0) == 0, size > 0 else {
+            return processTableViaProcInfo()
+        }
+        let stride = MemoryLayout<kinfo_proc>.stride
+        // Over-allocate: the table can grow between the sizing call and the fetch.
+        let capacity = size / stride + 32
+        var buffer = [kinfo_proc](repeating: kinfo_proc(), count: capacity)
+        var written = capacity * stride
+        let rc = buffer.withUnsafeMutableBytes { raw -> Int32 in
+            var length = raw.count
+            let result = sysctl(&mib, 4, raw.baseAddress, &length, nil, 0)
+            written = length
+            return result
+        }
+        guard rc == 0, written > 0 else { return processTableViaProcInfo() }
+
+        let count = min(written / stride, buffer.count)
+        var table: [Int32: ProcessTableEntry] = [:]
+        table.reserveCapacity(count)
+        for i in 0..<count {
+            let pid = buffer[i].kp_proc.p_pid
+            guard pid > 0 else { continue }
+            let comm = nulTerminatedCString(from: &buffer[i].kp_proc.p_comm)
+            table[pid] = ProcessTableEntry(ppid: buffer[i].kp_eproc.e_ppid, comm: comm)
+        }
+        return table.isEmpty ? processTableViaProcInfo() : table
+    }
+
+    /// Fallback table via `proc_pidinfo` per pid (the original implementation). Misses root-owned
+    /// ancestors like `login`, so `terminalHost` may come back empty for a hookless session — but a
+    /// degraded table beats no table if `KERN_PROC_ALL` ever fails.
+    private static func processTableViaProcInfo() -> [Int32: ProcessTableEntry] {
         var table: [Int32: ProcessTableEntry] = [:]
         for pid in pids() {
             guard let bsd = bsdInfo(pid: pid) else { continue }
