@@ -1,0 +1,41 @@
+#!/bin/sh
+# Strip AI-authorship footers from commit messages.
+#
+# Why: this repo's policy is "no AI signatures in commits" (CONTEXT.md §0). Tooling
+# defaults (Claude Code, Codex, etc.) can add "Co-Authored-By: Claude", "Claude-Session:"
+# or "Generated with ..." footers automatically, and those defaults may change over time.
+# This hook makes the policy independent of any tool's current behavior: whoever commits,
+# whatever the tool does, these footers never land in history.
+#
+# It ONLY removes specific machine-authorship footer lines. Prose that mentions "Claude
+# Code"/"Codex" is domain vocabulary (the app monitors those agents) and is kept.
+#
+# Enable once per clone:  git config core.hooksPath .githooks
+
+msg_file="$1"
+[ -f "$msg_file" ] || exit 0
+
+tmp="$msg_file.aiclean.$$"
+
+# Delete offending lines (case-insensitive on the key), then squeeze the trailing
+# blank lines the removal may leave behind.
+awk '
+  {
+    line = $0
+    low = tolower(line)
+    if (low ~ /^co-authored-by:.*(claude|anthropic|codex|openai|noreply@anthropic)/) next
+    if (low ~ /^claude-session:/) next
+    if (low ~ /^codex-session:/) next
+    if (line ~ /^🤖[[:space:]]*Generated with/) next
+    if (low ~ /generated with \[?claude code/) next
+    print line
+  }
+' "$msg_file" \
+  | awk '{ lines[NR] = $0 } END {
+      last = NR
+      while (last > 0 && lines[last] ~ /^[[:space:]]*$/) last--
+      for (i = 1; i <= last; i++) print lines[i]
+    }' > "$tmp" || { rm -f "$tmp"; exit 0; }
+
+mv "$tmp" "$msg_file"
+exit 0
