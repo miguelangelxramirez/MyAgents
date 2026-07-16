@@ -75,6 +75,45 @@ final class CodexUsageServiceTests: XCTestCase {
         XCTAssertFalse(usage.isStale, "a live RPC reading must not be flagged stale")
     }
 
+    func testAppServerRPC_windowAssignedByDuration_notByPosition() async throws {
+        // Codex's CURRENT shape: a single `primary` bucket that is the 7-DAY window
+        // (`windowDurationMins` 10080), `secondary` null. It must land in the 7d slot — NOT the 5h
+        // slot its position would have implied — so the popover shows only the 7-day limit and no
+        // phantom 5-hour reading (feedback 2026-07-16: "sale 5h, pero esa es la que han quitado").
+        let script = try writeScript("""
+        #!/bin/sh
+        read -r l1
+        read -r l2
+        read -r l3
+        echo '{"jsonrpc":"2.0","id":2,"result":{"rateLimits":{"primary":{"usedPercent":42,"windowDurationMins":10080,"resetsAt":1700000000},"secondary":null}}}'
+        """, named: "fake-app-server-7d-only.sh")
+
+        let service = CodexUsageService(rpcCommand: ["/bin/sh", script.path], rpcTimeout: 5, rolloutRoot: emptyRolloutRoot)
+        let usage = await service.fetch()
+
+        XCTAssertNil(usage.fiveHourPercent, "a 10080-minute window is the 7-day limit, not the 5-hour")
+        XCTAssertEqual(usage.sevenDayPercent, 42, "the 7-day window's reading must land in the 7d slot")
+        XCTAssertEqual(usage.presentWindows, [.sevenDay], "only the 7-day row should render")
+    }
+
+    func testAppServerRPC_bothWindowsByDuration_evenIfSlotsWereSwapped() async throws {
+        // Defensive: even if Codex put the 5-hour window in `secondary` and the 7-day in `primary`,
+        // duration wins and each lands in the right slot.
+        let script = try writeScript("""
+        #!/bin/sh
+        read -r l1
+        read -r l2
+        read -r l3
+        echo '{"jsonrpc":"2.0","id":2,"result":{"rateLimits":{"primary":{"usedPercent":80,"windowDurationMins":10080,"resetsAt":1700100000},"secondary":{"usedPercent":12,"windowDurationMins":300,"resetsAt":1700000000}}}}'
+        """, named: "fake-app-server-swapped.sh")
+
+        let service = CodexUsageService(rpcCommand: ["/bin/sh", script.path], rpcTimeout: 5, rolloutRoot: emptyRolloutRoot)
+        let usage = await service.fetch()
+
+        XCTAssertEqual(usage.fiveHourPercent, 12, "the 300-minute window is the 5-hour one")
+        XCTAssertEqual(usage.sevenDayPercent, 80, "the 10080-minute window is the 7-day one")
+    }
+
     /// Regression: real `codex app-server` only answers `account/rateLimits/read` while the client
     /// keeps stdin OPEN — a stdin EOF makes it shut down after `initialize`, so it never replies to
     /// id:2 (root-caused live, 2026-07-09: this was why Codex usage stayed greyed/stale). This

@@ -177,8 +177,9 @@ public struct CodexUsageService: Sendable {
         }
     }
 
-    /// Parses the app-server's `account/rateLimits/read` result — camelCase `usedPercent`/`resetsAt`
-    /// under `result.rateLimits.primary` (5h) / `.secondary` (7d).
+    /// Parses the app-server's `account/rateLimits/read` result — camelCase `usedPercent`/`resetsAt`/
+    /// `windowDurationMins` under `result.rateLimits.primary` / `.secondary`. Which bucket is the 5h
+    /// vs the 7d window is decided by its DURATION, not its position (see `bucket`).
     private static func parseRPCLine(_ line: String) -> UsageInfo? {
         guard let data = line.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -187,20 +188,18 @@ public struct CodexUsageService: Sendable {
             return nil
         }
         return usageInfo(
-            fiveHour: camelBucket(rateLimits["primary"]),
-            sevenDay: camelBucket(rateLimits["secondary"]),
+            buckets: [
+                bucket(rateLimits["primary"], percentKey: "usedPercent", resetKey: "resetsAt", windowKey: "windowDurationMins", positionalDefault: .fiveHour),
+                bucket(rateLimits["secondary"], percentKey: "usedPercent", resetKey: "resetsAt", windowKey: "windowDurationMins", positionalDefault: .sevenDay),
+            ],
             capturedAt: Date() // a live RPC reading — "now" is accurate, never stale by construction
         )
     }
 
-    private static func camelBucket(_ raw: Any?) -> (percent: Double, resetAt: Date?)? {
-        guard let dict = raw as? [String: Any], let percent = UsageInfo.percent(from: dict["usedPercent"]) else {
-            return nil
-        }
-        let resetSeconds = (dict["resetsAt"] as? NSNumber)?.int64Value ?? 0
-        let resetAt = resetSeconds > 0 ? Date(timeIntervalSince1970: TimeInterval(resetSeconds)) : nil
-        return (percent, resetAt)
-    }
+    /// A window ≥ this many minutes is the "7-day" bucket; anything shorter is the "5-hour" bucket.
+    /// One day is a wide gap between Codex's real windows (5 h = 300 min, 7 d = 10080 min), so the
+    /// split is unambiguous and tolerant of the exact numbers changing slightly.
+    private static let sevenDayCutoffMinutes: Double = 1440
 
     // MARK: - FALLBACK: tail the newest rollout JSONL files for their last `rate_limits` line
 
@@ -254,8 +253,9 @@ public struct CodexUsageService: Sendable {
         return last
     }
 
-    /// Parses one rollout JSONL line → `UsageInfo` (snake_case `used_percent`/`resets_at`, bucket
-    /// names `primary` (5h) / `secondary` (7d), possibly nested under `payload`).
+    /// Parses one rollout JSONL line → `UsageInfo` (snake_case `used_percent`/`resets_at`/
+    /// `window_minutes`, buckets `primary`/`secondary`, possibly nested under `payload`). Window
+    /// assignment is by DURATION, same as the RPC path (see `bucket`).
     private static func parseRolloutLine(_ line: String) -> UsageInfo? {
         guard let data = line.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -269,8 +269,10 @@ public struct CodexUsageService: Sendable {
         }
         guard let rateLimits else { return nil }
         return usageInfo(
-            fiveHour: snakeBucket(rateLimits["primary"]),
-            sevenDay: snakeBucket(rateLimits["secondary"]),
+            buckets: [
+                bucket(rateLimits["primary"], percentKey: "used_percent", resetKey: "resets_at", windowKey: "window_minutes", positionalDefault: .fiveHour),
+                bucket(rateLimits["secondary"], percentKey: "used_percent", resetKey: "resets_at", windowKey: "window_minutes", positionalDefault: .sevenDay),
+            ],
             // A rollout reading reflects the last turn Codex processed, not "right now" — flag it
             // stale so the UI can grey it out, same idea as an aged Claude statusline capture.
             capturedAt: Date(),
@@ -278,22 +280,44 @@ public struct CodexUsageService: Sendable {
         )
     }
 
-    private static func snakeBucket(_ raw: Any?) -> (percent: Double, resetAt: Date?)? {
-        guard let dict = raw as? [String: Any], let percent = UsageInfo.percent(from: dict["used_percent"]) else {
-            return nil
-        }
-        let resetSeconds = (dict["resets_at"] as? NSNumber)?.int64Value ?? 0
-        let resetAt = resetSeconds > 0 ? Date(timeIntervalSince1970: TimeInterval(resetSeconds)) : nil
-        return (percent, resetAt)
+    /// One parsed rate-limit bucket, already resolved to the display window it belongs to.
+    private struct RateBucket {
+        let percent: Double
+        let resetAt: Date?
+        let window: UsageWindow
     }
 
-    private static func usageInfo(
-        fiveHour: (percent: Double, resetAt: Date?)?,
-        sevenDay: (percent: Double, resetAt: Date?)?,
-        capturedAt: Date?,
-        forceStale: Bool = false
-    ) -> UsageInfo? {
-        guard fiveHour != nil || sevenDay != nil else { return nil }
+    /// Parses a rate-limit bucket and assigns it to a display window by its DURATION — NOT its
+    /// position in the response. Codex used to send `primary` = 5-hour and `secondary` = 7-day; it
+    /// now sends a single `primary` = 7-day (`windowDurationMins` 10080) with `secondary` null, and
+    /// may rearrange again. Reading the duration (5 h = 300 min, 7 d = 10080 min) maps each bucket
+    /// correctly whatever slot it arrives in: under a day → the 5-hour row, a day or more → the 7-day
+    /// row. When no duration field is present (older payloads / tests) it falls back to the bucket's
+    /// historical position, so nothing regresses.
+    private static func bucket(_ raw: Any?, percentKey: String, resetKey: String, windowKey: String, positionalDefault: UsageWindow) -> RateBucket? {
+        guard let dict = raw as? [String: Any], let percent = UsageInfo.percent(from: dict[percentKey]) else {
+            return nil
+        }
+        let resetSeconds = (dict[resetKey] as? NSNumber)?.int64Value ?? 0
+        let resetAt = resetSeconds > 0 ? Date(timeIntervalSince1970: TimeInterval(resetSeconds)) : nil
+        let window: UsageWindow
+        if let minutes = (dict[windowKey] as? NSNumber)?.doubleValue, minutes > 0 {
+            window = minutes < sevenDayCutoffMinutes ? .fiveHour : .sevenDay
+        } else {
+            window = positionalDefault
+        }
+        return RateBucket(percent: percent, resetAt: resetAt, window: window)
+    }
+
+    /// Assembles a `UsageInfo` from whichever buckets parsed, slotting each into its resolved window.
+    /// `nil` when no bucket had a usable reading (both absent → the provider reports no limit right
+    /// now, rendered as "—"/hidden by the UI). If two buckets resolve to the same window the first
+    /// wins — Codex never sends duplicates, but this stays deterministic if it ever did.
+    private static func usageInfo(buckets: [RateBucket?], capturedAt: Date?, forceStale: Bool = false) -> UsageInfo? {
+        let present = buckets.compactMap { $0 }
+        guard !present.isEmpty else { return nil }
+        let fiveHour = present.first { $0.window == .fiveHour }
+        let sevenDay = present.first { $0.window == .sevenDay }
         return UsageInfo(
             provider: .codex,
             fiveHourPercent: fiveHour?.percent,
