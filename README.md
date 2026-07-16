@@ -77,7 +77,9 @@ Open its ⚙ menu and choose **Enable tracking** the first time, so it can see y
 Or download `MyAgentsMac-<version>.zip` from the [Releases](https://github.com/miguelangelxramirez/MyAgents/releases) page.
 It's signed with a Developer ID and **notarized by Apple**, so it opens with a double-click — no Gatekeeper warnings.
 
-Requires **macOS 26** or newer. To update: `brew update && brew upgrade --cask myagents`.
+Requires **macOS 26** or newer. To update: `brew update && brew upgrade --cask myagents` if you installed
+via Homebrew, or — if you downloaded the `.zip` directly — the app updates itself with **Sparkle**
+(⚙ menu → **Check for Updates…**, plus an automatic background check you can opt into on first launch).
 
 ## Use
 

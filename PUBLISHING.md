@@ -214,3 +214,27 @@ is the steps that only Miguel can do (they need his Apple Developer account).
 - ⛔ Miguel-only (needs his Apple Developer account, cannot be done by an agent): create the
   Developer ID Application certificate, run `notarytool store-credentials`, create the Homebrew
   tap repo, run `build-release.sh` for real, create the GitHub release, push the filled-in cask.
+
+## Sparkle auto-updates (direct-.zip installs)
+
+Homebrew users update with `brew upgrade`. Everyone who installed the `.zip` directly gets updates
+through **Sparkle 2** (embedded via SPM; no XPC services/entitlements because the app isn't
+sandboxed). The app reads `SUFeedURL` + `SUPublicEDKey` from `mac/Resources/Info.plist` and offers
+"Check for Updates…" in the ⚙ menu.
+
+- **Feed:** `appcast.xml` at the repo root, served at
+  `https://raw.githubusercontent.com/miguelangelxramirez/MyAgents/main/appcast.xml`. An empty
+  channel = "no updates". `build-release.sh` step 9 regenerates it.
+- **Signing key (EdDSA):** the PRIVATE key lives ONLY in Miguel's login keychain (created once with
+  Sparkle's `generate_keys`). The matching public key is `SUPublicEDKey` in Info.plist
+  (`5eP0+rh5u/nGuv03JlX31fjdjZG1VUHYJN9Vv8LlCkA=`). ⚠️ **Back up the private key** — without it you
+  can never sign another update, and users would need to reinstall by hand. Export it with
+  `generate_keys -x sparkle_private_key.txt` and store it somewhere safe (a password manager), then
+  delete the export file.
+- **Release flow (added to `build-release.sh`):** bump `MARKETING_VERSION` **and**
+  `CURRENT_PROJECT_VERSION` in `project.yml` first (Sparkle compares `CFBundleVersion`), run the
+  script (step 9 downloads the pinned Sparkle tools, signs the stapled zip, rewrites `appcast.xml`),
+  then upload the zip to the GitHub release **and commit+push `appcast.xml` to `main`**. macOS may
+  prompt once to allow keychain access to the signing key — approve it.
+- **Not yet end-to-end:** the feed goes live only after the first Sparkle-enabled release is cut and
+  `appcast.xml` is pushed. Until then the app checks, finds an empty feed, and reports "up to date".

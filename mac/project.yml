@@ -30,6 +30,11 @@ settings:
       CODE_SIGN_IDENTITY: "Developer ID Application"
       OTHER_CODE_SIGN_FLAGS: "--timestamp"
 
+packages:
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: 2.9.4
+
 targets:
   MyAgentsMacCore:
     type: framework
@@ -86,6 +91,10 @@ targets:
     dependencies:
       - target: MyAgentsMacCore
         embed: true
+      # Sparkle auto-update (for users who install the .zip directly rather than via Homebrew).
+      # No XPC services / entitlements needed because this app is NOT sandboxed (CONTEXT.md D5) —
+      # the standard SPM integration works as-is under hardened runtime + notarization.
+      - package: Sparkle
 
   MyAgentsMacCoreTests:
     type: bundle.unit-test

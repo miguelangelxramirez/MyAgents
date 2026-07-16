@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import Combine
 import os
+import Sparkle
 import MyAgentsMacCore
 
 /// Owns the whole menu-bar surface: the `NSStatusItem`, its animated glyph, the `NSPopover`
@@ -26,6 +27,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let model = AppViewModel()
     private let notifier = PermissionNotifier()
     private let terminalFocuser = TerminalFocuser()
+    /// Sparkle auto-updater. Reads `SUFeedURL`/`SUPublicEDKey` from Info.plist; `startingUpdater:
+    /// true` lets it schedule background checks (and ask the user, on first launch, whether to check
+    /// automatically). Only meaningful for the direct-.zip install path — Homebrew users update via
+    /// `brew upgrade`. See `onCheckForUpdates` (the ⚙ menu's "Check for Updates…").
+    private let updaterController = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
 
     private var cancellables: Set<AnyCancellable> = []
     private let logger = Logger(subsystem: "com.miguelangelramirez.myagents.mac", category: "AppDelegate")
@@ -104,7 +110,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             model: model,
             onActivateSession: { [weak self] session in self?.activate(session) },
             isDetached: isDetached,
-            onReturnToMenuBar: { [weak self] in self?.returnToMenuBar() }
+            onReturnToMenuBar: { [weak self] in self?.returnToMenuBar() },
+            onCheckForUpdates: { [weak self] in self?.updaterController.checkForUpdates(nil) }
         )
     }
 

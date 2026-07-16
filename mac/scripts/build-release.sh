@@ -45,11 +45,11 @@ fail() {
     exit 1
 }
 
-echo "==> [1/8] Checking required tools"
+echo "==> [1/9] Checking required tools"
 command -v xcodegen >/dev/null 2>&1 || fail "xcodegen not found. Install it with: brew install xcodegen"
 command -v xcodebuild >/dev/null 2>&1 || fail "xcodebuild not found. Install/select Xcode with xcode-select."
 
-echo "==> [2/8] Preflight: Developer ID Application certificate"
+echo "==> [2/9] Preflight: Developer ID Application certificate"
 # find-identity lists valid signing identities in the login keychain. A missing cert here means
 # Miguel hasn't created one yet (Apple Developer > Certificates > + > Developer ID Application) —
 # this build MUST fail loud rather than silently falling back to ad-hoc/self signing, because an
@@ -69,7 +69,7 @@ To fix:
      \"Developer ID Application: <Your Name> ($TEAM_ID)\")."
 fi
 
-echo "==> [3/8] Preflight: notarytool keychain profile \"$NOTARY_PROFILE\""
+echo "==> [3/9] Preflight: notarytool keychain profile \"$NOTARY_PROFILE\""
 # `notarytool history` is a lightweight authenticated call — it fails immediately (and loudly) if
 # the named keychain profile doesn't exist or its stored credentials are stale/invalid, instead of
 # discovering that 10 minutes into a `submit --wait`.
@@ -87,13 +87,13 @@ App-Specific Passwords is the simplest option; an App Store Connect API key also
 Then re-run this script."
 fi
 
-echo "==> [4/8] xcodegen generate"
+echo "==> [4/9] xcodegen generate"
 (cd "$MAC_DIR" && xcodegen generate)
 
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 
-echo "==> [5/8] xcodebuild archive ($CONFIGURATION, $SIGN_IDENTITY)"
+echo "==> [5/9] xcodebuild archive ($CONFIGURATION, $SIGN_IDENTITY)"
 xcodebuild archive \
     -project "$MAC_DIR/MyAgentsMac.xcodeproj" \
     -scheme "$SCHEME" \
@@ -105,7 +105,7 @@ xcodebuild archive \
     CODE_SIGN_IDENTITY="$SIGN_IDENTITY" \
     OTHER_CODE_SIGN_FLAGS="--timestamp"
 
-echo "==> [6/8] Export (method: developer-id)"
+echo "==> [6/9] Export (method: developer-id)"
 cat > "$EXPORT_OPTIONS_PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -136,7 +136,7 @@ APP_PATH="$EXPORT_DIR/$APP_NAME"
 VERSION="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_PATH/Contents/Info.plist")"
 ZIP_PATH="$BUILD_DIR/MyAgentsMac-$VERSION.zip"
 
-echo "==> [7/8] Notarize v$VERSION"
+echo "==> [7/9] Notarize v$VERSION"
 # ditto (not `zip`) is Apple's recommended way to zip a .app for notarization/distribution — it
 # preserves the code signature's resource forks/metadata that a plain `zip` can silently corrupt.
 ditto -c -k --keepParent "$APP_PATH" "$ZIP_PATH"
@@ -157,7 +157,7 @@ if ! grep -q "status: Accepted" "$SUBMIT_LOG"; then
 runtime, an unsigned nested binary/Node script executable bit issue, or a stale/expired cert)."
 fi
 
-echo "==> [8/8] Staple + re-zip the stapled app"
+echo "==> [8/9] Staple + re-zip the stapled app"
 # The zip above is what notarytool saw — it does NOT contain the staple. Staple the .app itself,
 # then re-zip so the file we actually distribute/hash has the ticket embedded (works offline).
 xcrun stapler staple "$APP_PATH"
@@ -168,12 +168,44 @@ ditto -c -k --keepParent "$APP_PATH" "$ZIP_PATH"
 SHA256="$(shasum -a 256 "$ZIP_PATH" | awk '{print $1}')"
 echo "$SHA256" > "$ZIP_PATH.sha256"
 
+echo "==> [9/9] Generate + EdDSA-sign the Sparkle appcast"
+# Sparkle's `generate_appcast` builds the update feed and signs each archive with the EdDSA PRIVATE
+# key stored in this machine's login keychain (created once with `generate_keys`; the matching
+# public key is `SUPublicEDKey` in Resources/Info.plist). macOS may prompt once to allow keychain
+# access — approve it. The tools aren't vendored in the repo (15 MB), so fetch the pinned release if
+# they're not already cached under build/.
+SPARKLE_VERSION="2.9.4"
+TOOLS_DIR="$BUILD_DIR/sparkle-tools"
+GENERATE_APPCAST="$TOOLS_DIR/bin/generate_appcast"
+if [ ! -x "$GENERATE_APPCAST" ]; then
+    echo "    fetching Sparkle $SPARKLE_VERSION tools…"
+    mkdir -p "$TOOLS_DIR"
+    curl -fsSL "https://github.com/sparkle-project/Sparkle/releases/download/$SPARKLE_VERSION/Sparkle-$SPARKLE_VERSION.tar.xz" \
+        | tar -xJ -C "$TOOLS_DIR" || fail "Could not download/extract the Sparkle $SPARKLE_VERSION tools."
+    [ -x "$GENERATE_APPCAST" ] || fail "generate_appcast not found at $GENERATE_APPCAST after extraction."
+fi
+# Point generate_appcast at a directory holding ONLY this release's zip (never the .xcarchive/export
+# intermediates), with the download-url-prefix set to where the zip will actually live on the GitHub
+# release. Output overwrites the repo-root appcast.xml that SUFeedURL serves.
+APPCAST_SRC="$BUILD_DIR/appcast-src"
+rm -rf "$APPCAST_SRC"; mkdir -p "$APPCAST_SRC"
+cp "$ZIP_PATH" "$APPCAST_SRC/"
+"$GENERATE_APPCAST" "$APPCAST_SRC" \
+    --download-url-prefix "https://github.com/miguelangelxramirez/MyAgents/releases/download/v$VERSION/" \
+    -o "$MAC_DIR/../appcast.xml" \
+    || fail "generate_appcast failed (is the EdDSA signing key in your keychain? run generate_keys once)."
+
 echo ""
 echo "==> Done."
 echo "    App:     $APP_PATH"
 echo "    Zip:     $ZIP_PATH"
 echo "    Version: $VERSION"
 echo "    SHA256:  $SHA256"
+echo "    Appcast: $MAC_DIR/../appcast.xml (regenerated)"
 echo ""
-echo "Next: upload $ZIP_PATH to the GitHub release (tag v$VERSION), then update"
-echo "mac/dist/Casks/myagents.rb 'version' and 'sha256' with the values above."
+echo "Next:"
+echo "  1. Upload $ZIP_PATH to the GitHub release (tag v$VERSION)."
+echo "  2. Update mac/dist/Casks/myagents.rb 'version' and 'sha256' (Homebrew users)."
+echo "  3. Commit + push the regenerated appcast.xml to main (Sparkle users) — SUFeedURL serves it"
+echo "     from raw.githubusercontent.com. Bump MARKETING_VERSION and CURRENT_PROJECT_VERSION in"
+echo "     project.yml BEFORE building so Sparkle sees a newer version than the installed one."

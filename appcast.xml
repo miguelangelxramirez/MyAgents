@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>MyAgents (macOS)</title>
+    <link>https://raw.githubusercontent.com/miguelangelxramirez/MyAgents/main/appcast.xml</link>
+    <description>Sparkle update feed for the MyAgents macOS app.</description>
+    <language>en</language>
+    <!--
+      Release <item>s are generated (and EdDSA-signed) by `generate_appcast` at release time —
+      see mac/scripts/build-release.sh. An empty channel means "no updates available", which is the
+      correct state until the first Sparkle-enabled release is published. Do NOT hand-edit items:
+      the signatures must come from the private key in the maintainer's login keychain.
+    -->
+  </channel>
+</rss>

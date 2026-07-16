@@ -32,5 +32,9 @@
 	<string>Copyright © 2026 Miguel Ángel Ramírez.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>SUFeedURL</key>
+	<string>https://raw.githubusercontent.com/miguelangelxramirez/MyAgents/main/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>5eP0+rh5u/nGuv03JlX31fjdjZG1VUHYJN9Vv8LlCkA=</string>
 </dict>
 </plist>

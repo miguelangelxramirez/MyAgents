@@ -289,6 +289,22 @@
         }
       }
     },
+    "menu.check-updates": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check for Updates…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Buscar actualizaciones…"
+          }
+        }
+      }
+    },
     "menu.hooks.enable": {
       "localizations": {
         "en": {

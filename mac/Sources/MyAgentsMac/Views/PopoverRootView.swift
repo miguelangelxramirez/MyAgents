@@ -18,6 +18,9 @@ struct PopoverRootView: View {
     var isDetached: Bool = false
     /// Re-anchors the window back to the menu bar (closes the floating window). No-op in the popover.
     var onReturnToMenuBar: () -> Void = {}
+    /// Triggers a user-initiated Sparkle update check (⚙ menu → "Check for Updates…"). No-op in
+    /// previews/tests that don't wire the updater.
+    var onCheckForUpdates: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -51,7 +54,7 @@ struct PopoverRootView: View {
             if isDetached {
                 returnToMenuBarButton
             }
-            SettingsMenu(preferences: preferences, model: model)
+            SettingsMenu(preferences: preferences, model: model, onCheckForUpdates: onCheckForUpdates)
         }
         .padding(.horizontal, DesignTokens.Spacing.s)
         .padding(.vertical, DesignTokens.Spacing.xs)
@@ -169,6 +172,8 @@ struct PopoverRootView: View {
 private struct SettingsMenu: View {
     @ObservedObject var preferences: AppPreferences
     @ObservedObject var model: AppViewModel
+    /// Triggers a user-initiated Sparkle update check (see `AppDelegate.updaterController`).
+    var onCheckForUpdates: () -> Void = {}
 
     var body: some View {
         Menu {
@@ -180,6 +185,7 @@ private struct SettingsMenu: View {
             }
             Toggle(String(localized: "menu.start-at-login", defaultValue: "Open at login"), isOn: startAtLoginBinding)
             Divider()
+            Button(String(localized: "menu.check-updates", defaultValue: "Check for Updates…"), action: onCheckForUpdates)
             Button(String(localized: "menu.about", defaultValue: "About MyAgents")) { model.showAbout() }
             Button(String(localized: "menu.quit", defaultValue: "Quit MyAgents")) { model.quit() }
         } label: {
