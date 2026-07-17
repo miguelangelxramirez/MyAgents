@@ -3,13 +3,13 @@
 # Fill InstallerUrl + InstallerSha256 at release time:
 #   (Get-FileHash .\MyAgents.exe -Algorithm SHA256).Hash
 PackageIdentifier: MiguelAngelRamirez.MyAgents
-PackageVersion: "0.1.0"
+PackageVersion: "0.1.1"
 InstallerType: portable
 Commands:
   - myagents
 Installers:
   - Architecture: x64
-    InstallerUrl: https://github.com/miguelangelxramirez/MyAgents/releases/download/v0.1.0/MyAgents.exe
-    InstallerSha256: 28CDC3C64DE851D91700EA29E1E57413D5F53BE41863C2A57750CFC3339AEA8E
+    InstallerUrl: https://github.com/miguelangelxramirez/MyAgents/releases/download/v0.1.1/MyAgents.exe
+    InstallerSha256: 7E3D544A825C4E727EA03177E7BEA156BBA77AF0865B88D24F2AD636F53B14DB
 ManifestType: installer
 ManifestVersion: 1.6.0
