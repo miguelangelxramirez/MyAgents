@@ -4,7 +4,11 @@
 
 # MyAgents
 
-![MyAgents widget](docs/screenshots/firstimagewidget.png) <img width="505" height="435" alt="Captura de pantalla 2026-07-17 a las 12 54 54" src="https://github.com/user-attachments/assets/638e16a3-da51-46f0-9224-ae901edfc8f8" />
+MacOS
+<img width="505" height="435" alt="Captura de pantalla 2026-07-17 a las 12 54 54" src="https://github.com/user-attachments/assets/638e16a3-da51-46f0-9224-ae901edfc8f8" />
+
+Windows
+![MyAgents widget](docs/screenshots/firstimagewidget.png)
 
 
 A lightweight, always-visible app that watches **all your AI-coding terminals at once**.
