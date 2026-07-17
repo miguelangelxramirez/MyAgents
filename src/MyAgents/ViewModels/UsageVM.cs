@@ -72,12 +72,19 @@ public sealed class UsageVM : INotifyPropertyChanged
         // the statusline stops re-rendering, so usage.json freezes), keep the countdown AND grey the
         // bars, and put the age on its OWN one-line note below the group — so neither text shrinks.
         long ageMin = u.CapturedAtUnix > 0 ? (DateTimeOffset.UtcNow.ToUnixTimeSeconds() - u.CapturedAtUnix) / 60 : 0;
-        bool stale = ageMin >= 30;   // only for a genuinely IDLE session, not transient/just-relaunched
+        bool captureStale = ageMin >= 30;   // Claude idle session: usage.json stops refreshing
+        // A window is ALSO stale when its reset time has already PASSED — a snapshot the live source
+        // (Codex RPC) couldn't refresh (e.g. WSL exec down), so the % is old and the countdown reads
+        // "now". Grey it and say so, instead of presenting a stale reading as if it were live.
+        bool sStale = captureStale || u.SessionStale;
+        bool wStale = captureStale || u.WeeklyStale;
         SessionText = $"{SessionPercent:0}%   ·   {ResetText(u.SessionResetsAt)}";
         WeeklyText = $"{WeeklyPercent:0}%   ·   {ResetText(u.WeeklyResetsAt)}";
-        SessionBrush = stale ? Palette.TextMuted : _barBrush;
-        WeeklyBrush = stale ? Palette.TextMuted : _barBrush;
-        StaleNote = stale ? $"last updated {ageMin}m ago (session idle)" : "";
+        SessionBrush = sStale ? Palette.TextMuted : _barBrush;
+        WeeklyBrush = wStale ? Palette.TextMuted : _barBrush;
+        StaleNote = captureStale ? $"last updated {ageMin}m ago (session idle)"
+                  : (sStale || wStale) ? "usage may be out of date — waiting for a fresh reading"
+                  : "";
     }
 
     private static string ResetText(DateTimeOffset? reset)
