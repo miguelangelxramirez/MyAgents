@@ -24,7 +24,11 @@ Same product, same privacy contract on both. Jump to [Install](#install).
 
 
 
-https://github.com/user-attachments/assets/350c4716-db66-4904-97b3-0ead7a5e613e
+https://github.com/user-attachments/assets/350c4716-db66-4904-97b3-0ead7a5e613e 
+ 
+
+
+https://github.com/user-attachments/assets/a53e9fb5-1627-4566-8213-96e9daf57d7e
 
 
 ## What you get
