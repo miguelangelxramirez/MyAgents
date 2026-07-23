@@ -132,7 +132,34 @@ public partial class App : System.Windows.Application
         _ = PollAsync();
         _ = RefreshUsageAsync();
 
-        if (_settings.WidgetVisible) _widget.ShowWidget();
+        if (_settings.WidgetVisible)
+        {
+            _widget.ShowWidget();
+            // At boot the widget can end up BEHIND the other startup apps' windows. Bring it back to
+            // the front once, a few seconds later, when the logon window-storm has settled — so the
+            // user sees it on its own without hunting the tray-overflow icon.
+            var settle = new DispatcherTimer { Interval = TimeSpan.FromSeconds(6) };
+            settle.Tick += (_, _) => { settle.Stop(); try { if (_settings.WidgetVisible && !_widgetClosed) _widget.ShowWidget(); } catch { } };
+            settle.Start();
+        }
+
+        // First launch: turn ON "Start with Windows" by default so it's always there on every boot
+        // (a monitor you have to re-launch by hand isn't a monitor). Transparent + reversible: we tell
+        // the user and they can switch it off in the ⚙ menu. Done ONCE — if they later disable it, we
+        // never silently re-enable.
+        if (!_settings.FirstRunDone)
+        {
+            _settings.FirstRunDone = true;
+            _settings.Save();
+            try
+            {
+                StartupManager.SetEnabled(true);
+                _tray.ShowBalloonTip(6000, "MyAgents",
+                    "Set to start with Windows (turn off in the ⚙ menu). Find it anytime: press ⊞ Win and type \"MyAgents\".",
+                    Forms.ToolTipIcon.Info);
+            }
+            catch { }
+        }
 
         _ = CheckForUpdatesAsync();   // passive, opt-out, once/day — shows a small notice if a newer release exists
     }
@@ -268,7 +295,7 @@ public partial class App : System.Windows.Application
             NotifyPermissions(sessions);
             _lastSessions = sessions;
 
-            if (_widget.IsVisible) _widget.UpdateSessions(sessions);
+            if (_widget.IsVisible) { _widget.UpdateSessions(sessions); _widget.EnsureTopmost(); }
 
             string agg = sessions.Any(s => s.NeedsAttention) ? "permission"
                        : sessions.Any(s => s.IsBusy) ? "busy" : "idle";

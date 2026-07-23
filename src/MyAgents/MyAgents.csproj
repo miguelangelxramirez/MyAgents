@@ -11,10 +11,13 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>MyAgents</AssemblyName>
     <RootNamespace>MyAgents</RootNamespace>
+    <!-- App/exe icon (the robot logo, same artwork as the macOS app). Shows in Explorer,
+         Start menu, taskbar and the Start-menu shortcut (which inherits the exe's icon). -->
+    <ApplicationIcon>Resources\AppIcon.ico</ApplicationIcon>
     <!-- Keep this in sync with the GitHub Release tag you publish (e.g. v0.1.1). The update
          check compares this against the latest release tag, so a mismatch would make the app
          think it's ahead of the latest and never show the "update available" notice. -->
-    <Version>0.1.1</Version>
+    <Version>0.1.2</Version>
     <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
 

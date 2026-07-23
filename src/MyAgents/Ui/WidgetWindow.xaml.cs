@@ -36,6 +36,17 @@ public partial class WidgetWindow : Window, INotifyPropertyChanged
 
     private const double EdgeMargin = 4;
 
+    // --- Win32: force real "always on top" Z-order. WPF's Topmost property sets the style but,
+    // when the app shows the window from a BACKGROUND process (at boot / after resume), Windows
+    // does NOT actually re-order it to the front — it keeps the topmost flag yet leaves the window
+    // BEHIND the foreground app (measured: topmost=True but sitting behind everything). SetWindowPos
+    // with HWND_TOPMOST forces the genuine Z-order reinsert, works from the background (no foreground
+    // rights needed) and never steals focus (SWP_NOACTIVATE). See EnsureTopmost().
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
+    private static readonly IntPtr HWND_TOPMOST = new(-1);
+    private const uint SWP_NOSIZE = 0x0001, SWP_NOMOVE = 0x0002, SWP_NOACTIVATE = 0x0010;
+
     public WidgetWindow(AppSettings settings)
     {
         _settings = settings;
@@ -179,6 +190,22 @@ public partial class WidgetWindow : Window, INotifyPropertyChanged
         ApplyAnchor();
         Topmost = false; Topmost = true;
         Activate();
+        EnsureTopmost();   // WPF Topmost alone doesn't re-order from a background process — force it
+    }
+
+    /// <summary>Force the window into Windows' topmost Z-band via Win32, so it's really ABOVE
+    /// everything (WPF's Topmost property alone leaves it behind when shown from the background at
+    /// boot/resume). No focus stealing (SWP_NOACTIVATE), no move/resize. Called on every show and,
+    /// while visible, on each poll so it can never silently sink behind other windows.</summary>
+    public void EnsureTopmost()
+    {
+        try
+        {
+            var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+            if (hwnd == IntPtr.Zero) return;
+            SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
+        catch { /* never let a Z-order tweak break the app */ }
     }
 
     /// <summary>Called from the tray menu's Position submenu.</summary>

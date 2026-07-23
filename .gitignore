@@ -5,6 +5,9 @@ obj/
 publish/
 artifacts/
 
+# winget: wingetcreate drops the generated winget-pkgs manifests here when submitting — not part of this repo
+manifests/
+
 # OS / editor
 Thumbs.db
 .DS_Store

@@ -19,6 +19,7 @@ public sealed class AppSettings
     public bool NotificationsEnabled { get; set; } = true;  // toast + sound when a session needs your permission
     public bool UpdateCheckEnabled { get; set; } = true;    // opt-out: check GitHub Releases for a newer version (the app's only network call)
     public long LastUpdateCheckUnix { get; set; } = 0;      // throttle the check to at most once/day
+    public bool FirstRunDone { get; set; } = false;         // first launch enables autostart by default (reversible in ⚙) so it's always there
 
     [JsonIgnore]
     private static string Dir =>
